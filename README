@@ -1,0 +1,28 @@
+===
+=== A sample grizzly-clojure adapter based on jruby-grizzly
+===
+
+Dependencies: 
+  clojure.jar
+  grizzly-framework-1.9.0.jar
+  grizzly-http-1.9.0.jar
+  grizzly-http-utils-1.9.0.jar
+
+Edit com.agh.webserver.Main to set up the the root path correctly (setClojureRoot).
+
+Create a sample clojure function at CLOJURE_ROOT/cgi/cgi.clj in namespace "cgi". You can use render from com.agh.webserver.rack.rack.clj e.g:
+----
+(ns cgi)
+
+(use 'com.agh.webserver.rack)
+
+(defn hello-complex [request resp]
+  (do
+    (println "EN EL CLIENTE")
+    (render resp
+            "<h1> Hola Grizzly!!</h1>"
+            200
+            {:Content-type "text/html"})))
+----
+
+Launch the application and browse: http://localhost:port/cgi/cgi/function-name e.g: http://localhost:port/cgi/cgi/hello-complex
