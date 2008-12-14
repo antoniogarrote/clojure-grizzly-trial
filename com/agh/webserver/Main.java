@@ -1,6 +1,7 @@
 package com.agh.webserver;
         
 import clojure.lang.RT;
+import com.sun.grizzly.tcp.StaticResourcesAdapter;
 import java.io.IOException;
 import java.util.logging.Level;
 import java.util.logging.Logger;

@@ -10,6 +10,9 @@ import com.agh.webserver.rack.DefaultRackApplicationFactory;
 import com.agh.webserver.rack.MultiThreadedRackAdapter;
 import com.agh.webserver.rack.RackApplication;
 import com.agh.webserver.rack.RackApplicationFactory;
+import com.sun.grizzly.tcp.Request;
+import com.sun.grizzly.tcp.Response;
+import com.sun.grizzly.tcp.StaticResourcesAdapter;
 import com.sun.grizzly.tcp.http11.GrizzlyAdapter;
 import com.sun.grizzly.tcp.http11.GrizzlyRequest;
 import com.sun.grizzly.tcp.http11.GrizzlyResponse;
@@ -36,6 +39,7 @@ public class ClojureAdapter extends GrizzlyAdapter{
     private MultiThreadedRackAdapter handler;
     private ClojureRuntimeAsyncFilter asyncFilter;
     private RackApplicationFactory factory;
+    private StaticResourcesAdapter staticAdapter;
 
 
     public ClojureAdapter(String contextRoot, String clojureRoot, int numberOfRuntime, int minRt, int maxRt, boolean asyncExecution, ClojureRuntimeAsyncFilter asyncFilter) {
@@ -43,7 +47,8 @@ public class ClojureAdapter extends GrizzlyAdapter{
 
         this.asyncFilter = asyncFilter;
         this.logger = Logger.getLogger("Clojure::RackAdapter::Logger");
-        
+
+        this.staticAdapter = new StaticResourcesAdapter(rootFolder+"public");
         this.setRootFolder(rootFolder+"public");
         this.contextRoot = contextRoot;
         this.appRoot = clojureRoot;

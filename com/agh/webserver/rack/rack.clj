@@ -24,11 +24,6 @@
 ;;    (getBody [] (:body rack-response))
 ;;    (respond [grizzly-response]
 
-(defn hello-inner[]
-  (do
-    (println "hello-inner")
-    (str "y adios...")))
-
 
 (defn update-rack-response
   "Updates the rack response with new status, headers and body. The new content
@@ -78,5 +73,10 @@
        @res#)))
 
 
-(defn rack-invokation-point [req function]
-  (with-rack-response req function))
+(defn test-update-rack-response []
+  (let [response (ref (create-rack-response))]
+      (render response "test" 201 {:Content-type "text/html"})))
+
+
+(defmacro invokation [func-name-str]
+  `(~(find-var (symbol func-name-str)) "hola"))
