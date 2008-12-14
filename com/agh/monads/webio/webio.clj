@@ -53,7 +53,7 @@
           environment (:environment web-request)]
       (not (nil? (get environment header))))))
 
-(defn request-header
+(defn get-request-header
   "retrieves the content of a header from the request"
     ([web-request header]
     (let [header (. header toUpperCase)
