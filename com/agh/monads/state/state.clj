@@ -3,53 +3,35 @@
   it sequentially"
 )
 
-;;
-;; @ Antonio Garrote Hernández
-;;
+(ns 'com.agh.monads.state)
 
-(ns com.agh.monads.state
-  (:use com.agh.monads)
-  (:use com.agh.utils))
+(use 'com.agh.monads)
 
-(defn applied-to 
+(defn stateful
   "Wraps the data into the state monad"
   {:monad :State}
-  ([data] (return :State data)))
+  ([data] (return :State {:state {} :data data}))
+  ([state data] (return :State {:state state :data data})))
 
-(defmethod >>= :State [f s]
+(defmethod >>= :State [f m]
   "pass the modified content to the next step of the
    transformation"
-  (f (:content s)))
+    (f m))
 
-(defn transform
-  "Modifies the state stored in the State monad returning the modified
-   state of the monad"
+(defn put
+  "stores some data in the state monad"
   {:monad :State}
-  ([keyword func state]
-    (let [current-value (keyword state)]
-      (return :State (assoc state keyword (func current-value))))))
+  ([name value f m]
+    (let [state (:state m)
+          data (:data m)]
+      (let [res (f data)]
+        (stateful (from-monad (transform value  (fn [x] res) state)) nil)))))
 
-
-(clojure/comment
-  "tests"
-)
-
-(use 'clojure.contrib.test-is)
-
-(deftest test-mg-applied-to
-  (is (= (applied-to "test")
-         (struct Monad :State nil "test"))))
-
-(deftest test-m-assoc-currified
-  (is (=
-        (do->>= (curry transform :count (curry + 1)) (applied-to {:count 1})
-                (curry transform :count (curry + 1))
-                (curry transform :count (curry + 1)))
-        (return :State {:count 4}))))
-
-(deftest test-m-assoc-currified-simp
-  (is (=
-        (do->>= (c_ transform :count (c_ + 1)) (applied-to {:count 1})
-                (c_ transform :count (c_ + 1))
-                (c_ transform :count (c_ + 1)))
-        (return :State {:count 4}))))
+(defn pass
+  "Carries on the computation passing the state to the next step"
+  {:monad :State}
+  ([f m]
+    (let [state (:state m)
+          data (:data m)]
+      (let [res (f data)]
+        (stateful state data)))))

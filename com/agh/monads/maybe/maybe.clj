@@ -68,3 +68,23 @@
                               check-random
                               check-random         ))
         :Maybe)))
+
+(clojure/comment
+
+(deftest test-maybe-monad-lambdas
+  (is (= (>>= (fn [y] (just (str y x "a")))
+           (>>= (fn [x] (just "a"))
+             (>>= (fn [] (just "a"))
+               (just ""))))
+        "aaa")))
+
+)
+
+(clojure/comment
+
+   (do-b->>= (just "") (check-random :as x)
+                       (check-random :as y)
+                       (fn [] (do (println (str x y)) 
+                                  (check-random))))
+
+)

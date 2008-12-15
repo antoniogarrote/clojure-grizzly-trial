@@ -94,6 +94,6 @@
 
 (deftest test-webio-wrapping
   (is (=
-        (wrap-request {:test 1})
-        (struct Monad :WebIO :Unfinished
-          (struct web-request-processing {:test 1} (create-rack-response) {})))))
+        (str (wrap-request {:test 1}))
+        (str (struct Monad :WebIO :Unfinished
+                  (struct web-request-processing {:test 1} (create-rack-response) {}))))))

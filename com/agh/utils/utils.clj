@@ -20,7 +20,7 @@
   "Currifies a function. If we have f(x,y) -> z, then
    curry(f): x -> (y -> z).
    It is possible to obtain the same effect with:
-   curry(f) = lambda(a).f(a,y)."
+   curry(f) = lambda(x).f(x,y)."
   `(fn [x#] (~func ~@args x#)))
 
 (defmacro c_ [& args]
@@ -69,3 +69,36 @@
 (defmacro c.a_ [& args]
   "Convenience notations for composition and application"
   `(compose-apply ~@args))
+
+
+
+(clojure/comment
+  "Tests"
+)
+
+(use 'clojure.contrib.test-is)
+
+(deftest test-curry
+  (is (= ((curry + 1) 3)
+         ((fn [x] (+ x 1)) 3))))
+
+(deftest test-composisition-and-curry
+  (is (= ((compose (+ 1) (+ 1) (+ 1)) 3)
+         ((fn [z] (+ z 1)) ((fn [y] (+ y 1)) ((fn [x] (+ 1 x)) 3))))))
+
+(deftest test-mixture-composition-lambda
+  (is (= ((compose (+ 1) (fn [x] (+ x 1)) (+ 1)) 3)
+         ((fn [z] (+ z 1)) ((fn [y] (+ y 1)) ((fn [x] (+ 1 x)) 3))))))
+
+(deftest test-filter-curry
+  (is (= (filter (c_ = 1) [1 2 3 1 1 2 3])
+         (filter (fn [x] (= x 1)) [1 2 3 1 1 2 3]))))
+
+(deftest test-compose-and-apply
+  (is (= (compose-apply (+ 1) (+ 1) (+ 1) 3)
+         ((fn [z] (+ z 1)) ((fn [y] (+ y 1)) ((fn [x] (+ 1 x)) 3))))))
+
+(deftest test-compose-filters
+  (is (= (c.a_ (map (c_ + 2)) (filter (c_ = 1)) [1 2 3 4 1])
+         [3 3])))
+

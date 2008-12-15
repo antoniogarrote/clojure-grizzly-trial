@@ -7,7 +7,7 @@
   (do
     (use :reload 'com.agh.monads)
     (use :reload 'com.agh.monads.maybe)
-    (use :reload 'com.agh.monads.state)
+    (use :reload 'com.agh.monads.pipe)
     (use :reload 'com.agh.monads.webio)
     (use :reload 'com.agh.utils)
     (use :reload 'com.agh.webserver.framework.router)
