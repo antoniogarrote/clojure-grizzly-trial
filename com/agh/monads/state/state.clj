@@ -3,9 +3,10 @@
   it sequentially"
 )
 
-(ns 'com.agh.monads.state)
+(ns com.agh.monads.state)
 
 (use 'com.agh.monads)
+(use 'com.agh.monads.pipe)
 
 (defn stateful
   "Wraps the data into the state monad"
@@ -22,8 +23,8 @@
   "stores some data in the state monad"
   {:monad :State}
   ([name value f m]
-    (let [state (:state m)
-          data (:data m)]
+    (let [ data (:data m)
+           state (:state m) ]
       (let [res (f data)]
         (stateful (from-monad (transform value  (fn [x] res) state)) nil)))))
 
@@ -34,4 +35,5 @@
     (let [state (:state m)
           data (:data m)]
       (let [res (f data)]
-        (stateful state data)))))
+        (stateful state res)))))
+

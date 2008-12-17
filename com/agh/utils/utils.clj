@@ -3,7 +3,7 @@
 )
 
 ;;
-;; @author Antonio Garrote Hern√°ndez
+;; @author Antonio Garrote Hern·ndez
 ;;
 
 (ns com.agh.utils)
@@ -33,11 +33,11 @@
          rst# (rest fs) ]
     (if (nil? rst#)
       (if (re-find #"^\(fn[\*]? " (str `~fst#))
-	`(~fst# ~x)
-	`((curry ~@fst#) ~x))
+        `(~fst# ~x)
+        `((curry ~@fst#) ~x))
       (if (re-find #"^\(fn[\*]? " (str `~fst#))
-	`(~fst# (compose-inner ~x ~@rst#))
-	`( (curry ~@fst#) (compose-inner ~x ~@rst#))))))
+        `(~fst# (compose-inner ~x ~@rst#))
+        `( (curry ~@fst#) (compose-inner ~x ~@rst#))))))
 
 (defmacro compose
   "Allow the composition of several currified or single argument
@@ -63,7 +63,7 @@
      `((compose ~f) ~x))
   ([f g & fsx]
      (let [x# (last fsx)
-	   fs# (conj (conj (drop-last fsx) g) f)]
+           fs# (conj (conj (drop-last fsx) g) f)]
        `((compose ~@fs#) ~x#))))
 
 (defmacro c.a_ [& args]
