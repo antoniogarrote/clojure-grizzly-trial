@@ -23,9 +23,17 @@
    curry(f) = lambda(x).f(x,y)."
   `(fn [x#] (~func ~@args x#)))
 
+(clojure/comment
+
 (defmacro c_ [& args]
-  "Convenience notations for currying"
+  "Convenience notation for currying"
   `(curry ~@args))
+
+)
+
+(defmacro c_ [& args]
+  "convenience notation for currying"
+  `(partial ~@args))
 
 ;; private
 (defmacro compose-inner [ x & fs ]
