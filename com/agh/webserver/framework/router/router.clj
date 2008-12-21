@@ -4,7 +4,7 @@
 )
 
 ;;
-;; @author Antonio Garrote Hernández
+;; @author Antonio Garrote Hernandez
 ;;
 
 (ns com.agh.webserver.framework.router)
@@ -270,7 +270,7 @@
    - (* token) -> (run-many token)
    - (&& tokens) -> (run-and (parser tokens))
    - (|| tokens) -> (run-or (parser tokens))
-   - (? params) -> "
+   - (params params) -> parsers combination for params token"
   (if (= (class t) clojure.lang.Symbol)
     (let [kw (keyword (. (str t) toLowerCase))]
     (c_ run-one (c_ parse-http-method kw)))
@@ -283,7 +283,7 @@
   (if (= (class t) clojure.lang.PersistentList)
     (let [symb  (first t)
           parsers (rest t)]
-      (if (= (str symb) "?")
+      (if (= (str symb) "params")
         (let [others (map (fn[x] (parser-factory-params x)) parsers)]
           (c_ run-and others ))
       (if (= (str symb) "*")
@@ -553,18 +553,28 @@
 
 (deftest test-parser-params-1
   (is (=
-       ((parser-factory '(? :test)) (list (mock-request-http-tokens-with-params nil nil '((:test 1) (:b 2))) {:env-var :a}))
+       ((parser-factory '(params :test)) (list (mock-request-http-tokens-with-params nil nil '((:test 1) (:b 2))) {:env-var :a}))
        '{:monad-type :Maybe, :monad-subtype :Just, :content (nil {:env-var :a})})))
 
 (deftest test-parser-params-2
   (is (=
-       ((parser-factory '(? :test :b)) (list (mock-request-http-tokens-with-params nil nil '((:test 1) (:b 2))) {:env-var :a}))
+       ((parser-factory '(params :test :b)) (list (mock-request-http-tokens-with-params nil nil '((:test 1) (:b 2))) {:env-var :a}))
        '{:monad-type :Maybe, :monad-subtype :Just, :content (nil {:env-var :a})})))
 
 (deftest test-parser-params-3
   (is (=
-       ((parser-factory '(? :test (:b 2))) (list (mock-request-http-tokens-with-params nil nil '((:test 1) (:b 2))) {:env-var :a}))
+       ((parser-factory '(params :test (:b 2))) (list (mock-request-http-tokens-with-params nil nil '((:test 1) (:b 2))) {:env-var :a}))
        '{:monad-type :Maybe, :monad-subtype :Just, :content (nil {:env-var :a})})))
+
+(deftest test-parser-params-4
+  (is (=
+       ((parser-factory '(params :test (:b 3))) (list (mock-request-http-tokens-with-params nil nil '((:test 1) (:b 2))) {:env-var :a}))
+       '{:monad-type :Maybe, :monad-subtype :Nothing, :content nil})))
+
+(deftest test-parser-params-5
+  (is (=
+       ((parser-factory '(params :testa (:b 2))) (list (mock-request-http-tokens-with-params nil nil '((:test 1) (:b 2))) {:env-var :a}))
+       '{:monad-type :Maybe, :monad-subtype :Nothing, :content nil})))
 
 
 (deftest test-check-route-1
@@ -590,4 +600,14 @@
 (deftest test-check-route-5
   (is (=
        (check-route '[(|| GET POST) "google" (&& "es" :lang)] (list (mock-request-http-tokens :delete "google" "es") {}))
+       '{:monad-type :Maybe, :monad-subtype :Nothing, :content nil})))
+
+(deftest test-check-route-6
+  (is (=
+       (check-route '[(|| GET POST) "google" (&& "es" :lang) (params :test)] (list (mock-request-http-tokens-with-params :get '("google" "es") '((:test 1) (:b 2))) {}))
+       '{:monad-type :Maybe, :monad-subtype :Just, :content (nil {:lang "es"})})))
+
+(deftest test-check-route-7
+  (is (=
+       (check-route '[(|| GET POST) "google" (&& "es" :lang) (params :test_b)] (list (mock-request-http-tokens-with-params :get '("google" "es") '((:test 1) (:b 2))) {}))
        '{:monad-type :Maybe, :monad-subtype :Nothing, :content nil})))
