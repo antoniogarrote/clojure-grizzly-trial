@@ -12,6 +12,8 @@
     (use :reload 'com.agh.monads.webio)
     (use :reload 'com.agh.utils)
     (use :reload 'com.agh.webserver.framework.router)
+    (use :reload 'com.agh.webserver.framework.persistence.rdf)
+    (use :reload 'com.agh.webserver.framework.persistence.rdf.vocabularies.xsd)
     (use :reload 'com.agh.webserver.rack)))
 
 (use :reload 'com.agh.webserver.rack)

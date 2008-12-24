@@ -27,7 +27,7 @@
   {:monad :WebIO}
   ([rack-request]
     (return :WebIO :Unfinished
-          (struct web-request-processing
+           (struct web-request-processing
                   rack-request
                   (create-rack-response)
                   {}))))

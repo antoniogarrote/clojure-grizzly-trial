@@ -5,6 +5,13 @@ import com.sun.grizzly.tcp.StaticResourcesAdapter;
 import java.io.IOException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+/*
+import org.openrdf.repository.Repository;
+import org.openrdf.repository.RepositoryException;
+import org.openrdf.repository.sail.SailRepository;
+import org.openrdf.sail.rdbms.RdbmsStore;
+import org.slf4j.LoggerFactory;
+*/
 
 public class Main {
 
@@ -13,7 +20,19 @@ public class Main {
     /**
      * @param args the command line arguments
      */
-    public static void main(String[] args) {   
+    public static void main(String[] args) {
+
+/*
+        SailRepository srp = new SailRepository(new RdbmsStore("com.mysql.jdbc.Driver",
+                "jdbc:mysql://localhost:3306/clojure_sesame",
+                "root",
+                "root"));
+        try {
+            srp.initialize();
+        } catch (RepositoryException ex) {
+            Logger.getLogger(Main.class.getName()).log(Level.SEVERE, null, ex);
+        }
+ */
 /*
         try {
             RT.loadResourceScript(MAINCLJ);
