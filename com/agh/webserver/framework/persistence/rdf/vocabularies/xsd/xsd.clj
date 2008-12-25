@@ -23,6 +23,29 @@
   (build-uri (rdf-ns :xsd) "double"))
 
 
+(defn literal-string
+  "Builds a new literal string"
+  ([value]
+     (build-literal value))
+  ([value lang]
+     (build-literal value (xsd-string) lang)))
+
+(defn literal-decimal
+  "Builds a new literal decimal"
+  ([value]
+     (build-literal value (xsd-decimal) "")))
+
+(defn literal-double
+  "Builds a new literal double"
+  ([value]
+     (build-literal value (xsd-double) "")))
+
+(defn literal-float
+  "Builds a new literal float"
+  ([value]
+     (build-literal value (xsd-float) "")))
+
+
 (clojure/comment
   "Tests"
 )
@@ -37,6 +60,14 @@
   (is (= (xsd-string)
          {:prefix :xsd, :value "string"})))
 
+(deftest test-literal-string-1
+  (is (= (literal-string "test")
+         {:value "test" :datatype {:prefix :xsd, :value "string"} :lang ""})))
+
+(deftest test-literal-string-2
+  (is (= (literal-string "test" "en-GB")
+         {:value "test" :datatype {:prefix :xsd, :value "string"} :lang "en-GB"})))
+
 (deftest test-xsd-float
   (is (= (xsd-float)
          {:prefix :xsd, :value "float"})))
@@ -48,3 +79,15 @@
 (deftest test-xsd-double
   (is (= (xsd-double)
          {:prefix :xsd, :value "double"})))
+
+(deftest test-literal-decimal
+  (is (= (literal-decimal 1)
+         {:value 1  :lang "" :datatype {:prefix :xsd, :value "decimal"}})))
+
+(deftest test-literal-float
+  (is (= (literal-float 1.0)
+         {:value 1.0  :lang "" :datatype {:prefix :xsd, :value "float"}})))
+
+(deftest test-literal-double
+  (is (= (literal-double 2)
+         {:value 2  :lang "" :datatype {:prefix :xsd, :value "double"}})))
