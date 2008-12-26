@@ -28,22 +28,22 @@
   ([value]
      (build-literal value))
   ([value lang]
-     (build-literal value (xsd-string) lang)))
+     (build-literal value lang)))
 
 (defn literal-decimal
   "Builds a new literal decimal"
   ([value]
-     (build-literal value (xsd-decimal) "")))
+     (build-literal value (xsd-decimal))))
 
 (defn literal-double
   "Builds a new literal double"
   ([value]
-     (build-literal value (xsd-double) "")))
+     (build-literal value (xsd-double))))
 
 (defn literal-float
   "Builds a new literal float"
   ([value]
-     (build-literal value (xsd-float) "")))
+     (build-literal value (xsd-float))))
 
 
 (clojure/comment
