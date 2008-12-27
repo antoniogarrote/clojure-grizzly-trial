@@ -13,6 +13,7 @@
         '(org.openrdf.sail.rdbms RdbmsStore)
         '(org.openrdf.sail.memory MemoryStore)
         '(org.openrdf.repository.RepositoryConnection)
+        '(org.openrdf.sail.memory.model MemURI)
         '(org.slf4j LoggerFactory))
 
 ;; (init-repository "com.mysql.jdbc.Driver" "jdbc:mysql://localhost:3306/clojure_sesame" "root" "root")
@@ -30,6 +31,22 @@
      (let [repo (new SailRepository (new MemoryStore))]
        (do (. repo initialize)
            repo))))
+
+(defn write-graph-in-repository
+  "Stores the statements in a graph into the provided repository"
+  ([graph connection]
+     (let [translated-graph (sesame-translate graph (. connection (getValueFactory)))
+           the-triplets (:triplets (to-triplets translated-graph))]
+       (loop [triplets the-triplets]
+         (if (not (nil? triplets))
+           (let [triplet (first triplets)]
+             (do
+               (. connection (add (:subject triplet)
+                                  (:predicate triplet)
+                                  (:object triplet)
+                                  (make-array org.openrdf.sail.memory.model.MemURI 0)))
+               (recur (rest triplets))))
+           (. connection (commit)))))))
 
 (clojure/comment
 
@@ -66,8 +83,11 @@
 ;; - predicate -> rdf-relation
 ;; - object -> rdf-node
 (defstruct rdf-triplet :subject :predicate :object)
+;; A finite list of rdf-nodes with certain context values
+(defstruct rdf-graph :nodes :context)
 ;; A finite list of rdf-triplets with certain context values
-(defstruct rdf-graph :triplets :context)
+(defstruct rdf-triplets-set :triplets :context)
+
 
 (defn build-uri
   "Builds a new URI from a string. The URI can be specified in two different
@@ -152,6 +172,13 @@
   ([identifier preds]
      (build-node identifier :blank-node preds)))
 
+(defn build-graph
+  "Builds a new RDF graph for the provided description"
+  ([nodes]
+     (with-meta (struct rdf-graph nodes #{}) {:rdf :graph}))
+  ([nodes context]
+     (with-meta (struct rdf-graph nodes context) {:rdf :graph})))
+
 ;; Sesame translations
 
 (defmulti sesame-translate (fn [obj factory] (rdf-meta obj)))
@@ -195,7 +222,100 @@
     (with-meta (struct rdf-node
                        (. factory (createBNode value))
                        (map (fn [pred] (sesame-translate pred factory)) preds))
-               {:rdf :literal-node})))
+               {:rdf :blank-node})))
+
+(defmethod sesame-translate :graph [obj factory]
+  "Translates the RDF graph into a sesame equivalent"
+  (with-meta (struct rdf-graph
+                     (map (fn [node] (sesame-translate node factory)) (:nodes obj))
+                     (:context obj))
+             {:rdf :graph}))
+
+(defmethod sesame-translate :triplet [obj factory]
+  "Translates a RDF triplet into a sesame equivalent"
+  (with-meta (struct rdf-triplet
+                     (sesame-translate (:subject obj) factory)
+                     (sesame-translate (:predicate obj) factory)
+                     (sesame-translate (:object obj) factory))
+             {:rdf :triplet}))
+
+(defmethod sesame-translate :triplets-set [obj factory]
+  "Translates a RDF triplet into a sesame equivalent"
+  (build-triplets-set
+   (map (fn [triplet] (sesame-translate triplet factory)) (:triplets obj))
+   (:context obj)))
+
+
+;; Triplets set manipulation
+
+(defn build-triplets-set
+  "Builds a new triplets set"
+  ([]
+     (with-meta (struct rdf-triplets-set #{} #{}) {:rdf :triplets-set}))
+  ([triplets]
+     (with-meta (struct rdf-triplets-set (set triplets) #{}) {:rdf :triplets-set}))
+  ([triplets context]
+     (with-meta (struct rdf-triplets-set (set triplets) (set context)) {:rdf :triplets-set})))
+
+(defn add-triplet
+  "Appends a triplet to a triplet set"
+  ([triplet triplets-set]
+     (let [triplets (:triplets triplets-set)
+           context (:context triplets-set)]
+       (build-triplets-set (conj triplets triplet) context))))
+
+(defn union-triplets-set
+  "Computes the union of two triplets set"
+  ([set-a set-b]
+     (build-triplets-set (clojure.set/union (:triplets set-a) (:triplets set-b))
+                         (clojure.set/union (:context set-a) (:context set-b)))))
+
+;; From graph to triplets
+(defmulti to-triplets (fn [obj] (rdf-meta obj)))
+
+(defmethod to-triplets :uri-node [obj]
+  "Translates a RDF URI node to a triplets-set"
+  (let [ col-of-sets (map (fn [predicate-triplets-translation]
+                            (let [predicate-triplets-set (second predicate-triplets-translation)
+                                  predicate-partial-triplet (first predicate-triplets-translation)
+                                  predicate-partial (first predicate-partial-triplet)
+                                  object-partial (second predicate-partial-triplet)]
+                              (add-triplet (with-meta (struct rdf-triplet (:value obj) predicate-partial object-partial) {:rdf :triplet})
+                                           predicate-triplets-set)))
+                          (map (fn [relation] (to-triplets relation))
+                               (:relations obj))) ]
+    (list (:value obj) (reduce #'union-triplets-set #{} col-of-sets))))
+
+(defmethod to-triplets :blank-node [obj]
+  "Translates a RDF URI node to a triplets-set"
+  (let [ col-of-sets (map (fn [predicate-triplets-translation]
+                            (let [predicate-triplets-set (second predicate-triplets-translation)
+                                  predicate-partial-triplet (first predicate-triplets-translation)
+                                  predicate-partial (first predicate-partial-triplet)
+                                  object-partial (second predicate-partial-triplet)]
+                              (add-triplet (with-meta (struct rdf-triplet (:value obj) predicate-partial object-partial) {:rdf :triplet})
+                                           predicate-triplets-set)))
+                          (map (fn [relation] (to-triplets relation))
+                               (:relations obj))) ]
+    (list (:value obj) (reduce #'union-triplets-set #{} col-of-sets))))
+
+(defmethod to-triplets :literal-node [obj]
+  "Translates a RDF literal node to a triplets-set"
+  (list (:value obj) (build-triplets-set)))
+
+(defmethod to-triplets :relation [obj]
+  "Translates a RDF relation node to a triplets-set"
+  (let [ object-triplets-translation (to-triplets (:object obj))
+         object-uri (first object-triplets-translation)
+         object-triplets (second object-triplets-translation) ]
+    (list (list (:value obj) object-uri) object-triplets)))
+
+(defmethod to-triplets :graph [obj]
+  "Translates a RDF graph to a set of triplets-set"
+  (reduce #'union-triplets-set #{} (map
+                                    (fn [node] (second (to-triplets node)))
+                                    (:nodes obj))))
+
 
 (clojure/comment
   "Tests"
@@ -385,3 +505,96 @@
              {:rdf :literal-node}))
       (. conn (close)))))
 
+(deftest test-sesame-translate-triplet-1
+  (let [repo (init-memory-repository)
+        conn (. repo (getConnection))]
+    (do
+      (is (= (str (sesame-translate (with-meta (struct rdf-triplet
+                                                       (build-uri (rdf-ns :rdf) "subject")
+                                                       (build-uri (rdf-ns :rdf) "predicate")
+                                                       (build-uri (rdf-ns :rdf) "object"))
+                                               {:rdf :triplet}) (. conn (getValueFactory))))
+             "{:subject #=(org.openrdf.sail.memory.model.MemURI. \"http://www.w3.org/1999/02/22-rdf-syntax-ns#subject\"), :predicate #=(org.openrdf.sail.memory.model.MemURI. \"http://www.w3.org/1999/02/22-rdf-syntax-ns#predicate\"), :object #=(org.openrdf.sail.memory.model.MemURI. \"http://www.w3.org/1999/02/22-rdf-syntax-ns#object\")}"))
+      (. conn (close)))))
+
+(deftest test-add-triplet-1
+  (is (= (add-triplet (struct rdf-triplet :a :b :c) (struct rdf-triplets-set (set []) (set [])))
+         {:triplets #{{:subject :a, :predicate :b, :object :c}}, :context #{}})))
+
+(deftest test-add-triplet-12
+  (is (= (add-triplet (struct rdf-triplet :a :b :c) (struct rdf-triplets-set (set [(struct rdf-triplet :a :b :c)]) (set [])))
+         {:triplets #{{:subject :a, :predicate :b, :object :c}}, :context #{}})))
+
+(deftest test-to-triplets-1
+  (is (= (to-triplets (build-uri-node :rdf "test-subject"
+                                      [(build-relation :rdf "test-relation"
+                                                       (build-uri-node :rdf "test-object" []))]))
+         '({:prefix :rdf, :value "test-subject"}
+           {:triplets #{{:subject {:prefix :rdf, :value "test-subject"}
+                         :predicate {:prefix :rdf, :value "test-relation"}
+                         :object {:prefix :rdf, :value "test-object"}}}
+            :context #{}}))))
+
+(deftest test-to-triplets-2
+  (is (= (to-triplets (build-uri-node :rdf "test-subject"
+                                      [(build-relation :rdf "test-relation"
+                                                       (build-uri-node :rdf "test-object" [(build-relation :rdf "test-relation2"
+                                                                                                           (build-uri-node :rdf "test-object2" []))]))]))
+         '({:prefix :rdf, :value "test-subject"}
+           {:triplets #{{:subject {:prefix :rdf, :value "test-subject"}
+                         :predicate {:prefix :rdf, :value "test-relation"}
+                         :object {:prefix :rdf, :value "test-object"}}
+                        {:subject {:prefix :rdf, :value "test-object"}
+                         :predicate {:prefix :rdf, :value "test-relation2"}
+                         :object {:prefix :rdf, :value "test-object2"}}}, :context #{}}))))
+
+(deftest test-to-triplets-4
+  (is (= (to-triplets (build-uri-node :rdf "test-subject"
+                                      [(build-relation :rdf "test-relation"
+                                                       (build-literal-node "test"))]))
+         '({:prefix :rdf, :value "test-subject"}
+           {:triplets #{{:subject {:prefix :rdf, :value "test-subject"}
+                         :predicate {:prefix :rdf, :value "test-relation"}
+                         :object {:value "test", :datatype {:prefix :xsd, :value "string"}, :lang ""}}}
+            :context #{}}))))
+
+(deftest test-to-triplets-5
+  (is (= (to-triplets (build-uri-node :rdf "test-subject"
+                                      [(build-relation :rdf "test-relation"
+                                                       (build-blank-node "test" []))]))
+         '({:prefix :rdf, :value "test-subject"}
+           {:triplets #{{:subject {:prefix :rdf, :value "test-subject"}
+                         :predicate {:prefix :rdf, :value "test-relation"}
+                         :object "test"}}
+            :context #{}}))))
+
+(deftest test-to-triplets-6
+  (is (= (to-triplets (build-graph
+                       [(build-uri-node :rdf "test-subjecta"
+                                        [(build-relation :rdf "relation-1"
+                                                         (build-blank-node "testa" []))])
+                        (build-uri-node :rdf "test-subjectb"
+                                        [(build-relation :rdf "relation-2"
+                                                         (build-blank-node "testb" []))])]))
+         '{:triplets #{{:subject {:prefix :rdf, :value "test-subjecta"}
+                        :predicate {:prefix :rdf, :value "relation-1"}
+                        :object "testa"}
+                       {:subject {:prefix :rdf, :value "test-subjectb"}
+                        :predicate {:prefix :rdf, :value "relation-2"}
+                        :object "testb"}}
+           :context #{}})))
+
+(deftest write-to-repository
+  (let [repo (init-memory-repository)
+        conn (. repo (getConnection))
+        graph (build-graph
+                       [(build-uri-node :rdf "test-subjecta"
+                                        [(build-relation :rdf "relation-1"
+                                                         (build-blank-node "testa" []))])
+                        (build-uri-node :rdf "test-subjectb"
+                                        [(build-relation :rdf "relation-2"
+                                                         (build-blank-node "testb" []))])])]
+    (do (write-graph-in-repository graph conn)
+        (is (= 2
+               (. conn (size (make-array org.openrdf.sail.memory.model.MemURI 0)))))
+        (. conn (close)))))
