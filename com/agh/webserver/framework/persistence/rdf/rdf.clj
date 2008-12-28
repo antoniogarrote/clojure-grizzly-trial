@@ -32,22 +32,6 @@
        (do (. repo initialize)
            repo))))
 
-(defn write-graph-in-repository
-  "Stores the statements in a graph into the provided repository"
-  ([graph connection]
-     (let [translated-graph (sesame-translate graph (. connection (getValueFactory)))
-           the-triplets (:triplets (to-triplets translated-graph))]
-       (loop [triplets the-triplets]
-         (if (not (nil? triplets))
-           (let [triplet (first triplets)]
-             (do
-               (. connection (add (:subject triplet)
-                                  (:predicate triplet)
-                                  (:object triplet)
-                                  (make-array org.openrdf.sail.memory.model.MemURI 0)))
-               (recur (rest triplets))))
-           (. connection (commit)))))))
-
 (clojure/comment
 
 (defn test-rdf-repo []
@@ -179,6 +163,31 @@
   ([nodes context]
      (with-meta (struct rdf-graph nodes context) {:rdf :graph})))
 
+;; Triplets set manipulation
+
+(defn build-triplets-set
+  "Builds a new triplets set"
+  ([]
+     (with-meta (struct rdf-triplets-set #{} #{}) {:rdf :triplets-set}))
+  ([triplets]
+     (with-meta (struct rdf-triplets-set (set triplets) #{}) {:rdf :triplets-set}))
+  ([triplets context]
+     (with-meta (struct rdf-triplets-set (set triplets) (set context)) {:rdf :triplets-set})))
+
+(defn add-triplet
+  "Appends a triplet to a triplet set"
+  ([triplet triplets-set]
+     (let [triplets (:triplets triplets-set)
+           context (:context triplets-set)]
+       (build-triplets-set (conj triplets triplet) context))))
+
+(defn union-triplets-set
+  "Computes the union of two triplets set"
+  ([set-a set-b]
+     (build-triplets-set (clojure.set/union (:triplets set-a) (:triplets set-b))
+                         (clojure.set/union (:context set-a) (:context set-b)))))
+
+
 ;; Sesame translations
 
 (defmulti sesame-translate (fn [obj factory] (rdf-meta obj)))
@@ -245,31 +254,6 @@
    (map (fn [triplet] (sesame-translate triplet factory)) (:triplets obj))
    (:context obj)))
 
-
-;; Triplets set manipulation
-
-(defn build-triplets-set
-  "Builds a new triplets set"
-  ([]
-     (with-meta (struct rdf-triplets-set #{} #{}) {:rdf :triplets-set}))
-  ([triplets]
-     (with-meta (struct rdf-triplets-set (set triplets) #{}) {:rdf :triplets-set}))
-  ([triplets context]
-     (with-meta (struct rdf-triplets-set (set triplets) (set context)) {:rdf :triplets-set})))
-
-(defn add-triplet
-  "Appends a triplet to a triplet set"
-  ([triplet triplets-set]
-     (let [triplets (:triplets triplets-set)
-           context (:context triplets-set)]
-       (build-triplets-set (conj triplets triplet) context))))
-
-(defn union-triplets-set
-  "Computes the union of two triplets set"
-  ([set-a set-b]
-     (build-triplets-set (clojure.set/union (:triplets set-a) (:triplets set-b))
-                         (clojure.set/union (:context set-a) (:context set-b)))))
-
 ;; From graph to triplets
 (defmulti to-triplets (fn [obj] (rdf-meta obj)))
 
@@ -315,6 +299,142 @@
   (reduce #'union-triplets-set #{} (map
                                     (fn [node] (second (to-triplets node)))
                                     (:nodes obj))))
+
+
+
+;; SPARQL queries
+
+;; A SPARQL identifier
+(defstruct rdf-variable :value)
+;; A variable node in a graph template
+(defstruct rdf-variable-node :value :relations)
+;; A variable relation in a graph template
+(defstruct rdf-variable-relation :value :object)
+;; A SPARQL optional graph
+(defstruct rdf-optional-graph :value)
+;; A SPARQL filter
+(defstruct rdf-sparql-filter :type :identifier :condition)
+;; A variable graph template
+(defstruct rdf-graph-template :bindings :nodes :filters)
+
+(defn build-variable
+  "Builds a new variable identifier"
+  ([identifier]
+     (with-meta (struct rdf-variable identifier) {:rdf :variable-identifier})))
+
+(defn build-variable-relation
+ "Builds a new variable relation"
+ ([identifier related-object]
+    (with-meta (struct rdf-variable-relation (build-variable identifier) related-object) {:rdf :variable-relation})))
+
+(defn build-variable-node
+ "Builds a new variable node"
+ ([identifier preds]
+    (build-node (build-variable identifier) :variable-node preds)))
+
+(defn build-optional-graph
+  "Builds an optional graph in a pattern"
+  ([graph]
+     (with-meta (struct rdf-optional-graph graph) {:rdf :optional-graph})))
+
+(defn build-filter
+  "Builds a SPARQL filter"
+  ([type identifier condition]
+     (with-meta (struct rdf-sparql-filter type identifier condition) {:rdf :sparql-filter})))
+
+(defn build-<-filter
+  "< than SPARQL filter"
+  ([identifier value]
+     (build-filter :less-than identifier value)))
+
+;; a SPARQL query to a triplets-set
+(defmethod to-triplets :variable-node [obj]
+  "transforms a variable node in a set of triplets where the variable
+   is identified by a SPARQL variable"
+  (let [ col-of-sets (map (fn [predicate-triplets-translation]
+                            (let [predicate-triplets-set (second predicate-triplets-translation)
+                                  predicate-partial-triplet (first predicate-triplets-translation)
+                                  predicate-partial (first predicate-partial-triplet)
+                                  object-partial (second predicate-partial-triplet)]
+                              (add-triplet (with-meta (struct rdf-triplet (:value obj) predicate-partial object-partial) {:rdf :triplet})
+                                           predicate-triplets-set)))
+                          (map (fn [relation] (to-triplets relation))
+                               (:relations obj))) ]
+    (list (:value obj) (reduce #'union-triplets-set #{} col-of-sets))))
+
+(defmethod to-triplets :variable-relation [obj]
+  "Translates a RDF relation node to a triplets-set"
+  (let [ object-triplets-translation (to-triplets (:object obj))
+         object-uri (first object-triplets-translation)
+         object-triplets (second object-triplets-translation) ]
+    (list (list (:value obj) object-uri) object-triplets)))
+
+;; Translates a graph template into a SPARQL query
+(defmulti to-sparql (fn [obj bindings] (rdf-meta obj)))
+
+(use 'com.agh.utils)
+(defmethod to-sparql :uri-node [obj bindings]
+  "translates a uri-node into a SPARQL query"
+  (let [uri-string (uri-to-string (:value obj)) ]
+    (list uri-string
+          (if (nil? (:relations obj))
+            uri-string
+            (reduce  (fn [fragment-a fragment-b]  (str fragment-a fragment-b))
+                     ""
+                     (map (fn [relation] (str uri-string " " (to-sparql relation bindings)))
+                          (:relations obj)))))))
+
+(defmethod to-sparql :relation [obj bindings]
+  "translates a relation into a SPARQL query"
+  (let [ object-triplets-translation (to-sparql (:object obj) bindings)
+         object-sparql (first object-triplets-translation)
+         sparql-fragment (second object-triplets-translation) ]
+    (str (uri-to-string (:value obj)) " " object-sparql " .\n" sparql-fragment) ))
+
+(defmethod to-sparql :variable-node [obj bindings]
+  "translates a uri-node into a SPARQL query"
+  (let [uri-string (str "?" (. (str (:value (:value obj))) (substring 1 (. (str (:value (:value obj))) (length)))))  ]
+    (list uri-string
+          (if (nil? (:relations obj))
+            uri-string
+            (reduce  (fn [fragment-a fragment-b]  (str fragment-a fragment-b))
+                     ""
+                     (map (fn [relation] (str uri-string " " (to-sparql relation bindings)))
+                          (:relations obj)))))))
+
+(defmethod to-sparql :variable-relation [obj bindings]
+  "translates a relation into a SPARQL query"
+  (let [ object-triplets-translation (to-sparql (:object obj) bindings)
+         object-sparql (first object-triplets-translation)
+         sparql-fragment (second object-triplets-translation) ]
+    (str (str "?" (. (str (:value (:value obj))) (substring 1 (. (str (:value (:value obj))) (length))))
+              " " object-sparql " .\n" sparql-fragment) )))
+
+(defmethod to-sparql :graph [obj bindings]
+  "Translates a RDF graph to a set of triplets-set"
+  (str "{ " (reduce (fn [x y] (str x y))
+                    ""
+                    (map (fn [node] (second (to-sparql node bindings)))
+                         (:nodes obj)))
+       " }\n"))
+
+
+;; Persisting triplets into the repository
+(defn write-graph-in-repository
+  "Stores the statements in a graph into the provided repository"
+  ([graph connection]
+     (let [translated-graph (sesame-translate graph (. connection (getValueFactory)))
+           the-triplets (:triplets (to-triplets translated-graph))]
+       (loop [triplets the-triplets]
+         (if (not (nil? triplets))
+           (let [triplet (first triplets)]
+             (do
+               (. connection (add (:subject triplet)
+                                  (:predicate triplet)
+                                  (:object triplet)
+                                  (make-array org.openrdf.sail.memory.model.MemURI 0)))
+               (recur (rest triplets))))
+           (. connection (commit)))))))
 
 
 (clojure/comment
@@ -584,6 +704,22 @@
                         :object "testb"}}
            :context #{}})))
 
+(deftest test-to-triplets-variable-1
+  (is (= (to-triplets (build-graph
+                       [(build-variable-node :x
+                                        [(build-relation :rdf "relation-1"
+                                                         (build-blank-node "testa" []))])
+                        (build-uri-node :rdf "test-subjectb"
+                                        [(build-variable-relation :y
+                                                         (build-blank-node "testb" []))])]))
+         '{:triplets #{{:subject {:value :x}
+                        :predicate {:prefix :rdf, :value "relation-1"}
+                        :object "testa"}
+                       {:subject {:prefix :rdf, :value "test-subjectb"}
+                        :predicate {:value :y}
+                        :object "testb"}}
+           :context #{}})))
+
 (deftest write-to-repository
   (let [repo (init-memory-repository)
         conn (. repo (getConnection))
@@ -598,3 +734,24 @@
         (is (= 2
                (. conn (size (make-array org.openrdf.sail.memory.model.MemURI 0)))))
         (. conn (close)))))
+
+(deftest test-to-sparql-1
+  (is (= (to-sparql (build-graph
+                       [(build-variable-node :x
+                                        [(build-relation :rdf "relation-1"
+                                                         (build-uri-node :rdf "testa" []))])
+                        (build-uri-node :rdf "test-subjectb"
+                                        [(build-variable-relation :y
+                                                         (build-uri-node :rdf "testb" []))])])
+                    {})
+         "{ ?x http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1 http://www.w3.org/1999/02/22-rdf-syntax-ns#testa .\nhttp://www.w3.org/1999/02/22-rdf-syntax-ns#test-subjectb ?y http://www.w3.org/1999/02/22-rdf-syntax-ns#testb .\n }\n")))
+
+(deftest test-to-sparql-2
+  (is (= (to-sparql (build-uri-node :rdf "testb" [])
+                    {})
+         '("http://www.w3.org/1999/02/22-rdf-syntax-ns#testb" ""))))
+
+(deftest test-to-sparql-3
+  (is (= (to-sparql (build-relation :rdf "testb" (build-uri-node :rdf "testc" []))
+                    {})
+         "http://www.w3.org/1999/02/22-rdf-syntax-ns#testb http://www.w3.org/1999/02/22-rdf-syntax-ns#testc .\n")))
