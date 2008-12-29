@@ -116,6 +116,20 @@
        (with-meta (struct rdf-literal value param "") {:rdf :literal})
        (with-meta (struct rdf-literal value {:prefix :xsd, :value "string"} param) {:rdf :literal}))))
 
+(defn literal-to-string
+  "Gets a String representation of the literal compatible with SPARQL"
+  ([literal]
+     (let [base (str (:value literal))
+           datatype (if (= "" (:datatype literal))
+                      ""
+                      (uri-to-string (:datatype literal)))
+           lang (str (:lang literal))]
+       (if (= "" lang)
+         (if (= "" datatype)
+           base
+           (str base "^^" datatype))
+         (str base "@" lang)))))
+
 ;; relations
 
 (defn build-relation
@@ -315,7 +329,7 @@
 ;; A SPARQL filter
 (defstruct rdf-sparql-filter :type :identifier :condition)
 ;; A variable graph template
-(defstruct rdf-graph-template :bindings :nodes :filters)
+(defstruct rdf-graph-template :nodes-filters)
 
 (defn build-variable
   "Builds a new variable identifier"
@@ -335,7 +349,7 @@
 (defn build-optional-graph
   "Builds an optional graph in a pattern"
   ([graph]
-     (with-meta (struct rdf-optional-graph graph) {:rdf :optional-graph})))
+     (with-meta (struct rdf-optional-graph (build-graph graph)) {:rdf :optional-graph})))
 
 (defn build-filter
   "Builds a SPARQL filter"
@@ -346,6 +360,11 @@
   "< than SPARQL filter"
   ([identifier value]
      (build-filter :less-than identifier value)))
+
+(defn build-graph-template
+  "A graph template for a SPARQL query"
+  ([graph-filters-mappings]
+     (with-meta (struct rdf-graph-template graph-filters-mapping) {:rdf :graph-template})))
 
 ;; a SPARQL query to a triplets-set
 (defmethod to-triplets :variable-node [obj]
@@ -372,7 +391,6 @@
 ;; Translates a graph template into a SPARQL query
 (defmulti to-sparql (fn [obj bindings] (rdf-meta obj)))
 
-(use 'com.agh.utils)
 (defmethod to-sparql :uri-node [obj bindings]
   "translates a uri-node into a SPARQL query"
   (let [uri-string (uri-to-string (:value obj)) ]
@@ -384,6 +402,22 @@
                      (map (fn [relation] (str uri-string " " (to-sparql relation bindings)))
                           (:relations obj)))))))
 
+(defmethod to-sparql :blank-node [obj bindings]
+  "translates a blank-node into a SPARQL query"
+  (let [uri-string (str "_:" (:value obj)) ]
+    (list uri-string
+          (if (nil? (:relations obj))
+            uri-string
+            (reduce  (fn [fragment-a fragment-b]  (str fragment-a fragment-b))
+                     ""
+                     (map (fn [relation] (str uri-string " " (to-sparql relation bindings)))
+                          (:relations obj)))))))
+
+(defmethod to-sparql :literal-node [obj bindings]
+  "translates a literal-node into a SPARQL query"
+  (let [literal-string (literal-to-string (:value obj)) ]
+    (list literal-string "")))
+
 (defmethod to-sparql :relation [obj bindings]
   "translates a relation into a SPARQL query"
   (let [ object-triplets-translation (to-sparql (:object obj) bindings)
@@ -391,9 +425,21 @@
          sparql-fragment (second object-triplets-translation) ]
     (str (uri-to-string (:value obj)) " " object-sparql " .\n" sparql-fragment) ))
 
+(defn resolve-bindings
+  "Returns the SPARQL representation of a variable or the binded value
+   if a binding for that identifier exists in the bindings hash"
+  ([identifier bindings]
+     (let [kw-identifier (:value identifier)]
+       (if (nil? (get bindings kw-identifier))
+         (str "?" (. (str kw-identifier) (substring 1 (. (str kw-identifier) (length)))))
+         (let [identifier-val (:value identifier)]
+           (if (= (:literal (rdf-meta identifier-val)))
+             (literal-to-string (:value identifier-val))
+             (uri-to-string (:value identifier-val))))))))
+
 (defmethod to-sparql :variable-node [obj bindings]
   "translates a uri-node into a SPARQL query"
-  (let [uri-string (str "?" (. (str (:value (:value obj))) (substring 1 (. (str (:value (:value obj))) (length)))))  ]
+  (let [uri-string  (resolve-bindings (:value obj) bindings)]
     (list uri-string
           (if (nil? (:relations obj))
             uri-string
@@ -407,7 +453,7 @@
   (let [ object-triplets-translation (to-sparql (:object obj) bindings)
          object-sparql (first object-triplets-translation)
          sparql-fragment (second object-triplets-translation) ]
-    (str (str "?" (. (str (:value (:value obj))) (substring 1 (. (str (:value (:value obj))) (length))))
+    (str (str (resolve-bindings (:value obj) bindings)
               " " object-sparql " .\n" sparql-fragment) )))
 
 (defmethod to-sparql :graph [obj bindings]
@@ -417,6 +463,12 @@
                     (map (fn [node] (second (to-sparql node bindings)))
                          (:nodes obj)))
        " }\n"))
+
+(defmethod to-sparql :optional-graph [obj bindings]
+  "Translates a RDF graph to a set of triplets-set"
+  (str "OPTIONAL " (to-sparql (:value obj) bindings)))
+
+;;(defmethod to-sparql :graph-template [obj bindings]
 
 
 ;; Persisting triplets into the repository
@@ -488,6 +540,18 @@
 (deftest test-literal-3
   (is (= (build-literal "a" (build-uri "test"))
          {:value "a" :datatype {:prefix "", :value "test"} :lang ""})))
+
+(deftest test-literal-to-string-1
+  (is (= (literal-to-string (build-literal "a"))
+         "a^^http://www.w3.org/2001/XMLSchema#string")))
+
+(deftest test-literal-to-string-2
+  (is (= (literal-to-string (build-literal "a" "es_es"))
+         "a@es_es")))
+
+(deftest test-literal-to-string-3
+  (is (= (literal-to-string (build-literal "a" (build-uri "http://test.com#datatype")))
+         "a^^http://test.com#datatype")))
 
 (deftest test-relation-1
   (is (= (build-relation (rdf-ns :rdf) "test" (build-literal "testPredicate"))
@@ -755,3 +819,36 @@
   (is (= (to-sparql (build-relation :rdf "testb" (build-uri-node :rdf "testc" []))
                     {})
          "http://www.w3.org/1999/02/22-rdf-syntax-ns#testb http://www.w3.org/1999/02/22-rdf-syntax-ns#testc .\n")))
+
+(deftest test-to-sparql-4
+  (is (= (to-sparql (build-optional-graph
+                       [(build-variable-node :x
+                                        [(build-relation :rdf "relation-1"
+                                                         (build-uri-node :rdf "testa" []))])
+                        (build-uri-node :rdf "test-subjectb"
+                                        [(build-variable-relation :y
+                                                         (build-uri-node :rdf "testb" []))])])
+                    {})
+         "OPTIONAL { ?x http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1 http://www.w3.org/1999/02/22-rdf-syntax-ns#testa .\nhttp://www.w3.org/1999/02/22-rdf-syntax-ns#test-subjectb ?y http://www.w3.org/1999/02/22-rdf-syntax-ns#testb .\n }\n")))
+
+(deftest test-to-sparql-5
+  (is (= (to-sparql (build-optional-graph
+                       [(build-variable-node :x
+                                        [(build-relation :rdf "relation-1"
+                                                         (build-literal-node "test" "es_ES"))])
+                        (build-uri-node :rdf "test-subjectb"
+                                        [(build-variable-relation :y
+                                                         (build-uri-node :rdf "testb" []))])])
+                    {})
+         "OPTIONAL { ?x http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1 test@es_ES .\nhttp://www.w3.org/1999/02/22-rdf-syntax-ns#test-subjectb ?y http://www.w3.org/1999/02/22-rdf-syntax-ns#testb .\n }\n")))
+
+(deftest test-to-sparql-6
+  (is (= (to-sparql (build-optional-graph
+                       [(build-variable-node :x
+                                        [(build-relation :rdf "relation-1"
+                                                         (build-literal-node "test" "es_ES"))])
+                        (build-blank-node "a"
+                                        [(build-variable-relation :y
+                                                         (build-uri-node :rdf "testb" []))])])
+                    {})
+         "OPTIONAL { ?x http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1 test@es_ES .\n_:a ?y http://www.w3.org/1999/02/22-rdf-syntax-ns#testb .\n }\n")))
