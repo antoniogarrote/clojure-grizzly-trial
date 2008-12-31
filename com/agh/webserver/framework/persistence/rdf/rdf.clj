@@ -49,6 +49,7 @@
 (defstruct xml-namespace :value :prefix)
 (defstruct uri :prefix :value)
 (defstruct rdf-literal :value :datatype :lang)
+(defstruct blank-node-identifier :value)
 
 ;; :rdf metadata manipulation
 (defn rdf-meta
@@ -134,6 +135,17 @@
            (str base "^^" datatype))
          (str base "@" lang)))))
 
+;; blank node
+(defn build-bnode-identifier
+  "builds a new blank node identifier"
+  ([identifier]
+     (with-meta (struct blank-node-identifier identifier) {:rdf :bnode-identifier})))
+
+(defn bnode-identifier-to-string
+  "Gets a String representation of the bnode identifier"
+  ([bnode-identifier]
+     (:value bnode-identifier)))
+
 ;; relations
 
 (defn build-relation
@@ -172,7 +184,7 @@
 (defn build-blank-node
   "Builds a new blank node with a given identifier"
   ([identifier preds]
-     (build-node identifier :blank-node preds)))
+     (build-node (build-bnode-identifier identifier) :blank-node preds)))
 
 (defn build-graph
   "Builds a new RDF graph for the provided description"
@@ -207,6 +219,15 @@
 
 
 ;; Sesame translations
+
+(defmulti from-sesame (fn [obj] (class obj)))
+
+
+(defmethod from-sesame #=org.openrdf.sail.memory.model.MemBNode [obj]
+  "Translates a Sesame BNode into a blank URI"
+  (build-bnode-identifier (. obj (stringValue))))
+
+
 
 (defmulti sesame-translate (fn [obj factory] (rdf-meta obj)))
 
@@ -244,10 +265,10 @@
 
 (defmethod sesame-translate :blank-node [obj factory]
   "Translates the RDF blank node into a Sesame equivalent"
-  (let [value (:value obj)
+  (let [value (:value (:value obj))
         preds (:relations obj)]
     (with-meta (struct rdf-node
-                       (. factory (createBNode value))
+                       (build-bnode-identifier (. factory (createBNode value)))
                        (map (fn [pred] (sesame-translate pred factory)) preds))
                {:rdf :blank-node})))
 
@@ -295,11 +316,11 @@
                                   predicate-partial-triplet (first predicate-triplets-translation)
                                   predicate-partial (first predicate-partial-triplet)
                                   object-partial (second predicate-partial-triplet)]
-                              (add-triplet (with-meta (struct rdf-triplet (:value obj) predicate-partial object-partial) {:rdf :triplet})
+                              (add-triplet (with-meta (struct rdf-triplet (bnode-identifier-to-string (:value obj)) predicate-partial object-partial) {:rdf :triplet})
                                            predicate-triplets-set)))
                           (map (fn [relation] (to-triplets relation))
                                (:relations obj))) ]
-    (list (:value obj) (reduce #'union-triplets-set #{} col-of-sets))))
+    (list (bnode-identifier-to-string (:value obj)) (reduce #'union-triplets-set #{} col-of-sets))))
 
 (defmethod to-triplets :literal-node [obj]
   "Translates a RDF literal node to a triplets-set"
@@ -403,7 +424,7 @@
 
 (defmethod to-sparql :blank-node [obj bindings]
   "translates a blank-node into a SPARQL query"
-  (let [uri-string (str "_:" (:value obj)) ]
+  (let [uri-string (str "_:" (bnode-identifier-to-string (:value obj))) ]
     (list uri-string
           (if (nil? (:relations obj))
             uri-string
@@ -423,6 +444,10 @@
          object-sparql (first object-triplets-translation)
          sparql-fragment (second object-triplets-translation) ]
     (str "<" (uri-to-string (:value obj)) "> " object-sparql " .\n" sparql-fragment) ))
+
+(defn keyword-to-string
+  "Transforms a keyword into a string minus ':'"
+  ([kw] (. (str kw) (substring 1 (. (str kw) length)))))
 
 (defn resolve-bindings
   "Returns the SPARQL representation of a variable or the binded value
@@ -661,7 +686,7 @@
 
 (deftest test-blank-node-1
   (is (= (build-blank-node "test" [])
-         {:value "test", :relations []})))
+         {:value {:value "test"}, :relations []})))
 
 (deftest test-blank-node-2
   (is (= (meta (build-blank-node "test" []))
@@ -855,6 +880,10 @@
                (. conn (size (make-array org.openrdf.sail.memory.model.MemURI 0)))))
         (. conn (close)))))
 
+(deftest test-keword-to-string
+  (is (= (keyword-to-string :x)
+         "x")))
+
 (deftest test-to-sparql-1
   (is (= (to-sparql (build-graph
                        [(build-variable-node :x
@@ -961,18 +990,19 @@
   (is (= (prepare-bindings '(:x :y :z))
          {})))
 
+(use 'com.agh.utils)
 (deftest query-repository-1
   (is (= (let [repo (init-memory-repository)
                conn (. repo (getConnection))
                graph (build-graph
-                      [(build-uri-node :rdf "test-subjecta"
+                      [(build-uri-node "http://test.com/test-subjecta/whatever"
                                        [(build-relation :rdf "relation-1"
                                                         (build-blank-node "testa" []))])
                        (build-uri-node :rdf "test-subjectb"
                                        [(build-relation :rdf "relation-2"
                                                         (build-blank-node "testb" []))])])
                sparql (trace (str "THE QUERY " (query-template-in-repository
-                       :x
+                       :y
                        [{:template (build-graph
                                     [(build-variable-node
                                       :x [ (build-relation
@@ -980,7 +1010,7 @@
                                                                :y []))])])
                          :filters []}]))
                              (query-template-in-repository
-                       :x
+                       :y
                        [{:template (build-graph
                                     [(build-variable-node
                                       :x [ (build-relation
@@ -990,6 +1020,8 @@
                query (. conn (prepareTupleQuery (. QueryLanguage SPARQL) sparql))]
            (do
              (write-graph-in-repository graph conn)
-             (println (str "RESULT " (. query (evaluate))))
-             (. conn (close))))
-         "????")))
+             (let [ result  (. query (evaluate))
+                     binded (. (. result next) (getValue "y")) ]
+               (. conn (close))
+               (from-sesame binded))))
+         (build-bnode-identifier "testa"))))
