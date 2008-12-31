@@ -14,6 +14,10 @@
         '(org.openrdf.sail.memory MemoryStore)
         '(org.openrdf.repository.RepositoryConnection)
         '(org.openrdf.sail.memory.model MemURI)
+        '(org.openrdf.query TupleQuery)
+        '(org.openrdf.query TupleQueryResult)
+        '(org.openrdf.query BindingSet)
+        '(org.openrdf.query QueryLanguage)
         '(org.slf4j LoggerFactory))
 
 ;; (init-repository "com.mysql.jdbc.Driver" "jdbc:mysql://localhost:3306/clojure_sesame" "root" "root")
@@ -388,7 +392,7 @@
 
 (defmethod to-sparql :uri-node [obj bindings]
   "translates a uri-node into a SPARQL query"
-  (let [uri-string (uri-to-string (:value obj)) ]
+  (let [uri-string (str "<" (uri-to-string (:value obj)) ">") ]
     (list uri-string
           (if (nil? (:relations obj))
             uri-string
@@ -418,7 +422,7 @@
   (let [ object-triplets-translation (to-sparql (:object obj) bindings)
          object-sparql (first object-triplets-translation)
          sparql-fragment (second object-triplets-translation) ]
-    (str (uri-to-string (:value obj)) " " object-sparql " .\n" sparql-fragment) ))
+    (str "<" (uri-to-string (:value obj)) "> " object-sparql " .\n" sparql-fragment) ))
 
 (defn resolve-bindings
   "Returns the SPARQL representation of a variable or the binded value
@@ -430,7 +434,7 @@
          (let [identifier-val (get bindings kw-identifier)]
            (if (= :literal (rdf-meta identifier-val))
              (literal-to-string identifier-val)
-             (uri-to-string identifier-val)))))))
+             (str "<" (uri-to-string identifier-val) ">")))))))
 
 (defmethod to-sparql :variable-node [obj bindings]
   "translates a uri-node into a SPARQL query"
@@ -468,8 +472,6 @@
     (str "FILTER (" (:value obj) ") .\n")
     ""))
 
-(use 'com.agh.utils)
-
 (defmethod to-sparql :graph-template [obj bindings]
   (let [ fragments (map
                     (fn [mapping]
@@ -484,6 +486,46 @@
                         (str graph-sparql filters-sparql " }\n")))
                    (:nodes-filters obj)) ]
     (reduce (fn [a b] (str a b)) "" fragments)))
+
+;; Quering the repository with a RDF template
+
+(defn prepare-bindings
+  ([bindings-list]
+     (reduce
+      merge
+      {}
+      (map (fn [x] (if (= #=clojure.lang.Keyword
+                          (class x))
+                     {}
+                     x))
+           bindings-list))))
+
+(defn collect-vars
+  ([bindings-list]
+     (reduce
+      (fn [col elem-or-nil]
+        (if (nil? elem-or-nil) col (conj col elem-or-nil)))
+      []
+      (map (fn [x] (if (= #=clojure.lang.Keyword
+                          (class x))
+                     x
+                     (first (keys x))))
+           bindings-list))))
+
+(defn query-template-in-repository
+  "Queries the repository with the provided template"
+  ([& args]
+     (let [templates (last args)
+           bindings-list (drop-last args)
+           bindings (prepare-bindings bindings-list)
+           args (collect-vars bindings-list)
+           sparql-args (str (reduce
+                             (fn [acum elem] (str acum " ?" (. (str elem) (substring 1 (. (str elem) (length))))))
+                             "SELECT"
+                             args)
+                            "\n WHERE ")
+           sparql-graph (to-sparql (build-graph-template templates) bindings)]
+       (str sparql-args sparql-graph))))
 
 ;; Persisting triplets into the repository
 (defn write-graph-in-repository
@@ -822,17 +864,17 @@
                                         [(build-variable-relation :y
                                                          (build-uri-node :rdf "testb" []))])])
                     {})
-         "{ ?x http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1 http://www.w3.org/1999/02/22-rdf-syntax-ns#testa .\nhttp://www.w3.org/1999/02/22-rdf-syntax-ns#test-subjectb ?y http://www.w3.org/1999/02/22-rdf-syntax-ns#testb .\n")))
+         "{ ?x <http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#testa> .\n<http://www.w3.org/1999/02/22-rdf-syntax-ns#test-subjectb> ?y <http://www.w3.org/1999/02/22-rdf-syntax-ns#testb> .\n")))
 
 (deftest test-to-sparql-2
   (is (= (to-sparql (build-uri-node :rdf "testb" [])
                     {})
-         '("http://www.w3.org/1999/02/22-rdf-syntax-ns#testb" ""))))
+         '("<http://www.w3.org/1999/02/22-rdf-syntax-ns#testb>" ""))))
 
 (deftest test-to-sparql-3
   (is (= (to-sparql (build-relation :rdf "testb" (build-uri-node :rdf "testc" []))
                     {})
-         "http://www.w3.org/1999/02/22-rdf-syntax-ns#testb http://www.w3.org/1999/02/22-rdf-syntax-ns#testc .\n")))
+         "<http://www.w3.org/1999/02/22-rdf-syntax-ns#testb> <http://www.w3.org/1999/02/22-rdf-syntax-ns#testc> .\n")))
 
 (deftest test-to-sparql-4
   (is (= (to-sparql (build-optional-graph
@@ -843,7 +885,7 @@
                                         [(build-variable-relation :y
                                                          (build-uri-node :rdf "testb" []))])])
                     {})
-         "OPTIONAL { ?x http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1 http://www.w3.org/1999/02/22-rdf-syntax-ns#testa .\nhttp://www.w3.org/1999/02/22-rdf-syntax-ns#test-subjectb ?y http://www.w3.org/1999/02/22-rdf-syntax-ns#testb .\n")))
+         "OPTIONAL { ?x <http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#testa> .\n<http://www.w3.org/1999/02/22-rdf-syntax-ns#test-subjectb> ?y <http://www.w3.org/1999/02/22-rdf-syntax-ns#testb> .\n")))
 
 (deftest test-to-sparql-5
   (is (= (to-sparql (build-optional-graph
@@ -854,7 +896,7 @@
                                         [(build-variable-relation :y
                                                          (build-uri-node :rdf "testb" []))])])
                     {})
-         "OPTIONAL { ?x http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1 test@es_ES .\nhttp://www.w3.org/1999/02/22-rdf-syntax-ns#test-subjectb ?y http://www.w3.org/1999/02/22-rdf-syntax-ns#testb .\n")))
+         "OPTIONAL { ?x <http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1> test@es_ES .\n<http://www.w3.org/1999/02/22-rdf-syntax-ns#test-subjectb> ?y <http://www.w3.org/1999/02/22-rdf-syntax-ns#testb> .\n")))
 
 (deftest test-to-sparql-6
   (is (= (to-sparql (build-optional-graph
@@ -865,7 +907,7 @@
                                         [(build-variable-relation :y
                                                          (build-uri-node :rdf "testb" []))])])
                     {})
-         "OPTIONAL { ?x http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1 test@es_ES .\n_:a ?y http://www.w3.org/1999/02/22-rdf-syntax-ns#testb .\n")))
+         "OPTIONAL { ?x <http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1> test@es_ES .\n_:a ?y <http://www.w3.org/1999/02/22-rdf-syntax-ns#testb> .\n")))
 
 (deftest test-to-sparql-7
   (is (= (to-sparql (build-graph-template
@@ -879,7 +921,7 @@
                        :filters [(build-filter :x "?x < 25")
                                  (build-filter :y "isURI(?y)")]}])
                      {})
-         "OPTIONAL { ?x http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1 test@es_ES .\n_:a ?y http://www.w3.org/1999/02/22-rdf-syntax-ns#testb .\nFILTER (?x < 25) .\nFILTER (isURI(?y)) .\n }\n")))
+         "OPTIONAL { ?x <http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1> test@es_ES .\n_:a ?y <http://www.w3.org/1999/02/22-rdf-syntax-ns#testb> .\nFILTER (?x < 25) .\nFILTER (isURI(?y)) .\n }\n")))
 
 (deftest test-to-sparql-8
   (is (= (to-sparql (build-graph-template
@@ -892,5 +934,62 @@
                                                                                (build-uri-node :rdf "testb" []))])])
                        :filters [(build-filter :x "?x < 25")
                                  (build-filter :y "isURI(?y)")]}])
-                     {:x (build-uri :rdf :a)})
-         "OPTIONAL { http://www.w3.org/1999/02/22-rdf-syntax-ns#:a http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1 test@es_ES .\n_:a ?y http://www.w3.org/1999/02/22-rdf-syntax-ns#testb .\nFILTER (isURI(?y)) .\n }\n")))
+                     {:x (build-uri :rdf "a")})
+         "OPTIONAL { <http://www.w3.org/1999/02/22-rdf-syntax-ns#a> <http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1> test@es_ES .\n_:a ?y <http://www.w3.org/1999/02/22-rdf-syntax-ns#testb> .\nFILTER (isURI(?y)) .\n }\n")))
+
+(deftest test-to-sparql-9
+  (is (= (to-sparql
+          (build-graph-template
+           [{:template (build-graph
+                        [(build-variable-node :x
+                                              [ (build-relation :rdf "test-relation"
+                                                                (build-variable-node :y
+                                                                                     []))])])
+             :filters []}])
+          {})
+         "{ ?x <http://www.w3.org/1999/02/22-rdf-syntax-ns#test-relation> ?y .\n }\n")))
+
+(deftest test-prepare-bindings-1
+  (is (= (prepare-bindings '(:x :y {:z "test"}))
+         {:z "test"})))
+
+(deftest test-prepare-bindings-2
+  (is (= (prepare-bindings '(:x {:w "hola"} :y {:z "test"}))
+         {:w "hola", :z "test"})))
+
+(deftest test-prepare-bindings-3
+  (is (= (prepare-bindings '(:x :y :z))
+         {})))
+
+(deftest query-repository-1
+  (is (= (let [repo (init-memory-repository)
+               conn (. repo (getConnection))
+               graph (build-graph
+                      [(build-uri-node :rdf "test-subjecta"
+                                       [(build-relation :rdf "relation-1"
+                                                        (build-blank-node "testa" []))])
+                       (build-uri-node :rdf "test-subjectb"
+                                       [(build-relation :rdf "relation-2"
+                                                        (build-blank-node "testb" []))])])
+               sparql (trace (str "THE QUERY " (query-template-in-repository
+                       :x
+                       [{:template (build-graph
+                                    [(build-variable-node
+                                      :x [ (build-relation
+                                            :rdf "relation-1" (build-variable-node
+                                                               :y []))])])
+                         :filters []}]))
+                             (query-template-in-repository
+                       :x
+                       [{:template (build-graph
+                                    [(build-variable-node
+                                      :x [ (build-relation
+                                            :rdf "relation-1" (build-variable-node
+                                                               :y []))])])
+                         :filters []}]))
+               query (. conn (prepareTupleQuery (. QueryLanguage SPARQL) sparql))]
+           (do
+             (write-graph-in-repository graph conn)
+             (println (str "RESULT " (. query (evaluate))))
+             (. conn (close))))
+         "????")))
