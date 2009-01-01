@@ -115,11 +115,11 @@
   "Builds a new literal with datatype and language annotations by default, all the
    literals are marked as xsd:string datatypes"
   ([value]
-     (with-meta (struct rdf-literal value {:prefix :xsd, :value "string"} "") {:rdf :literal}))
+     (with-meta (struct rdf-literal value (with-meta {:prefix :xsd, :value "string"} {:rdf :uri}) "") {:rdf :literal}))
   ([value param]
      (if (is-rdf-meta? param)
        (with-meta (struct rdf-literal value param "") {:rdf :literal})
-       (with-meta (struct rdf-literal value {:prefix :xsd, :value "string"} param) {:rdf :literal}))))
+       (with-meta (struct rdf-literal value (with-meta {:prefix :xsd, :value "string"} {:rdf :uri}) param) {:rdf :literal}))))
 
 (defn literal-to-string
   "Gets a String representation of the literal compatible with SPARQL"
@@ -147,7 +147,6 @@
      (:value bnode-identifier)))
 
 ;; relations
-
 (defn build-relation
   "Builds a new relation for a given URI"
   ([prefix uri related-object]
@@ -194,7 +193,6 @@
      (with-meta (struct rdf-graph nodes context) {:rdf :graph})))
 
 ;; Triplets set manipulation
-
 (defn build-triplets-set
   "Builds a new triplets set"
   ([]
@@ -227,6 +225,19 @@
   "Translates a Sesame BNode into a blank URI"
   (build-bnode-identifier (. obj (stringValue))))
 
+(defmethod from-sesame #=org.openrdf.sail.memory.model.MemLiteral [obj]
+  "Translates a Sesame BNode into a blank URI"
+  (let [label (. obj getLabel)
+        datatype (. obj (getDatatype))
+        lang (.. obj (getLanguage)) ]
+    (if (or (nil? datatype) (= datatype "http://www.w3.org/2001/XMLSchema#string"))
+      (build-literal label lang)
+      (build-literal label (build-uri (. datatype stringValue))))))
+
+(defmethod from-sesame #=org.openrdf.sail.memory.model.MemURI [obj]
+  "Translates a Sesame URI into a RDF URI"
+  (build-uri (. obj stringValue)))
+
 
 
 (defmulti sesame-translate (fn [obj factory] (rdf-meta obj)))
@@ -238,7 +249,9 @@
 (defmethod sesame-translate :literal [obj factory]
   "Translates the RDF literal object into a Sesame equivalent"
   (if (= (:lang obj) "")
-    (. factory (createLiteral (:value obj) (uri-to-string (:datatype obj))))
+    (if (not (nil? (:datatype obj)))
+      (. factory (createLiteral (:value obj) (sesame-translate (:datatype obj) factory)))
+      (. factory (createLiteral (:value obj))))
     (. factory (createLiteral (:value obj) (:lang obj)))))
 
 (defmethod sesame-translate :relation [obj factory]
@@ -537,20 +550,51 @@
                      (first (keys x))))
            bindings-list))))
 
-(defn query-template-in-repository
-  "Queries the repository with the provided template"
-  ([& args]
-     (let [templates (last args)
-           bindings-list (drop-last args)
-           bindings (prepare-bindings bindings-list)
-           args (collect-vars bindings-list)
-           sparql-args (str (reduce
+
+(defn prepare-query-from-template
+  ([args templates bindings]
+     (let [sparql-args (str (reduce
                              (fn [acum elem] (str acum " ?" (. (str elem) (substring 1 (. (str elem) (length))))))
                              "SELECT"
                              args)
                             "\n WHERE ")
            sparql-graph (to-sparql (build-graph-template templates) bindings)]
        (str sparql-args sparql-graph))))
+
+;;; JUST FOR TESTING ;;;
+(defn build-query-from-template
+  "Transforms a template into a SPARQL query"
+  ([& args]
+     (let [templates (last args)
+           bindings-list (drop-last args)
+           bindings (prepare-bindings bindings-list)
+           args (collect-vars bindings-list)]
+       (prepare-query-from-template args templates bindings))))
+;;;;;;;;;;;;;;;;;;;;;;;;
+(use 'com.agh.utils)
+(defn query-template-in-repository
+  "Queries the repository with the provided template"
+    ([& args]
+     (let [connection (last args)
+           templates-or-map (last (drop-last args))
+           templates (if (is-rdf-meta? templates-or-map) (:nodes-filters templates-or-map) templates-or-map)
+           bindings-list (drop-last 2 args)
+           bindings (prepare-bindings bindings-list)
+           args (collect-vars bindings-list)
+           sparql-query (prepare-query-from-template args templates bindings)
+           sesame-query (. connection (prepareTupleQuery (. QueryLanguage SPARQL) sparql-query))]
+       (let [result (. sesame-query (evaluate))]
+         (loop [results []]
+           (if (. result hasNext)
+             (let [this-result (. result next)
+                   new-result (reduce
+                               (fn [acum var] (merge acum
+                                                     {var (from-sesame (. this-result (getValue (. (str var) (substring 1 (. (str var) (length)))))))}))
+                               {}
+                               args)]
+               (recur (conj results new-result)))
+             results))))))
+
 
 ;; Persisting triplets into the repository
 (defn write-graph-in-repository
@@ -569,6 +613,77 @@
                (recur (rest triplets))))
            (. connection (commit)))))))
 
+;; Translates a RDF template into a RDF graph with a set of bindings
+(defmulti template-to-graph (fn [obj bindings] (rdf-meta obj)))
+
+(defmethod template-to-graph :uri-node [obj bindings]
+  "Transforms a uri-node from a template into a graph"
+  (let [translated-relations (map (fn [r] (template-to-graph r bindings)) (:relations obj))]
+    (build-uri-node obj translated-relations)))
+
+(defmethod template-to-graph :literal-node [obj bindings]
+  "Transforms a literal-node from a template into a graph"
+  obj)
+
+(defmethod template-to-graph :blank-node [obj bindings]
+  "Transforms a blank-node from a template into a graph"
+  (let [translated-relations (map (fn [r] (template-to-graph r bindings)) (:relations obj))]
+    (build-blank-node obj translated-relations)))
+
+(defmethod template-to-graph :relation [obj bindings]
+  "Transforms a relation from a template into a graph"
+  (let [translated-object (template-to-graph (:object obj) bindings)]
+    (build-relation (:value obj) translated-object)))
+
+(defmethod template-to-graph :variable-relation [obj bindings]
+  "Transforms a relation from a template into a graph"
+  (let [translated-object (template-to-graph (:object obj) bindings)
+        variable-identifier (:value (:value obj))
+        value-for-identifier (get bindings variable-identifier) ]
+    (if (nil? value-for-identifier)
+      (throw (Exception. (str "Unbounded variable for variable relation " variable-identifier)))
+      (build-relation value-for-identifier translated-object))))
+
+(defmethod template-to-graph :variable-node [obj bindings]
+  "Transforms a relation from a template into a graph"
+  (let [translated-relations (map (fn [r] (template-to-graph r bindings)) (:relations obj))
+        variable-identifier (:value (:value obj))
+        value-for-identifier (get bindings variable-identifier) ]
+    (if (nil? value-for-identifier)
+      (throw (Exception. (str "Unbounded variable for variable node " variable-identifier)))
+      (let [tag (rdf-meta value-for-identifier)]
+        (if (= tag :bnode-identifier)
+          (build-blank-node (:value (value-for-identifier)) translated-relations)
+        (if (= tag :uri)
+          (build-uri-node value-for-identifier translated-relations)
+        (if (= tag :literal)
+          (build-literal-node value-for-identifier)
+          (throw (Exception. (str "Unknown RDF graph metadata " tag))))))))))
+
+(defmethod template-to-graph :graph [obj bindings]
+  "Transforms a graph froma template into a graph"
+  (let [translated-nodes (map (fn [n] (template-to-graph n bindings)) (:nodes obj))]
+    (build-graph translated-nodes)))
+
+(defmethod template-to-graph :optional-graph [obj bindings]
+  "Transforms a optional graph template from a template into a graph"
+  (try
+   (template-to-graph obj bindings)
+   (catch Exception _ (build-graph [])))) ;; if exception found, that means a lack of the optional binding
+                                          ;; so we return a graph without nodes
+
+(defmethod template-to-graph :graph-template [obj bindings]
+  "Transforms a graph template from a template into a graph"
+  (let [nodes-sets (reduce
+                    (fn [acum graph-filter-struct]
+                      (conj acum (:template graph-filter-struct)))
+                    []
+                    (:nodes-filters obj)) ]
+    (build-graph (reduce
+                  clojure.set/union
+                  []
+                  (map (fn [graph-from-template]
+                           (:nodes (template-to-graph graph-from-template bindings))) nodes-sets)))))
 
 (clojure/comment
   "Tests"
@@ -716,7 +831,7 @@
     (do
       (is (= (. (sesame-translate (build-literal "test") (. conn (getValueFactory)))
                 (toString))
-             "\"test\"@http://www.w3.org/2001/xmlschema#string"))
+             "\"test\"^^<http://www.w3.org/2001/XMLSchema#string>"))
       (. conn (close)))))
 
 (deftest test-sesame-translate-relation-1
@@ -725,7 +840,7 @@
     (do
       (is (= (. (sesame-translate (build-relation (rdf-ns :rdf) "test" (build-literal "testPredicate")) (. conn (getValueFactory)))
                 (toString))
-             "{:value #=(org.openrdf.sail.memory.model.MemURI. \"http://www.w3.org/1999/02/22-rdf-syntax-ns#test\"), :object #=(org.openrdf.sail.memory.model.MemLiteral. \"\\\"testPredicate\\\"@http://www.w3.org/2001/xmlschema#string\")}"))
+             "{:value #=(org.openrdf.sail.memory.model.MemURI. \"http://www.w3.org/1999/02/22-rdf-syntax-ns#test\"), :object #=(org.openrdf.sail.memory.model.MemLiteral. \"\\\"testPredicate\\\"^^<http://www.w3.org/2001/XMLSchema#string>\")}"))
       (. conn (close)))))
 
 (deftest test-sesame-translate-relation-2
@@ -759,7 +874,7 @@
     (do
       (is (= (. (sesame-translate (build-literal-node "test") (. conn (getValueFactory)))
                 (toString))
-             "{:value #=(org.openrdf.sail.memory.model.MemLiteral. \"\\\"test\\\"@http://www.w3.org/2001/xmlschema#string\"), :relations nil}"))
+             "{:value #=(org.openrdf.sail.memory.model.MemLiteral. \"\\\"test\\\"^^<http://www.w3.org/2001/XMLSchema#string>\"), :relations nil}"))
       (. conn (close)))))
 
 (deftest test-sesame-translate-literal-node-2
@@ -1001,22 +1116,14 @@
                        (build-uri-node :rdf "test-subjectb"
                                        [(build-relation :rdf "relation-2"
                                                         (build-blank-node "testb" []))])])
-               sparql (trace (str "THE QUERY " (query-template-in-repository
+               sparql (build-query-from-template
                        :y
                        [{:template (build-graph
                                     [(build-variable-node
                                       :x [ (build-relation
                                             :rdf "relation-1" (build-variable-node
                                                                :y []))])])
-                         :filters []}]))
-                             (query-template-in-repository
-                       :y
-                       [{:template (build-graph
-                                    [(build-variable-node
-                                      :x [ (build-relation
-                                            :rdf "relation-1" (build-variable-node
-                                                               :y []))])])
-                         :filters []}]))
+                         :filters []}])
                query (. conn (prepareTupleQuery (. QueryLanguage SPARQL) sparql))]
            (do
              (write-graph-in-repository graph conn)
@@ -1025,3 +1132,215 @@
                (. conn (close))
                (from-sesame binded))))
          (build-bnode-identifier "testa"))))
+
+(deftest query-repository-2
+  (is (= (let [repo (init-memory-repository)
+               conn (. repo (getConnection))
+               graph (build-graph
+                      [(build-uri-node "http://test.com/test-subjecta/whatever"
+                                       [(build-relation :rdf "relation-1"
+                                                        (build-literal-node "testa"))])
+                       (build-uri-node :rdf "test-subjectb"
+                                       [(build-relation :rdf "relation-2"
+                                                        (build-blank-node "testb" []))])])
+               sparql (build-query-from-template
+                       :x
+                       [{:template (build-graph
+                                    [(build-variable-node
+                                      :x [ (build-relation
+                                            :rdf "relation-1" (build-variable-node
+                                                               :y []))])])
+                         :filters []}])
+               query (. conn (prepareTupleQuery (. QueryLanguage SPARQL) sparql))]
+           (do
+             (write-graph-in-repository graph conn)
+             (let [ result  (. query (evaluate))
+                     binded (. (. result next) (getValue "x")) ]
+               (. conn (close))
+               (uri-to-string (from-sesame binded)))))
+         "http://test.com/test-subjecta/whatever")))
+
+(deftest query-repository-3
+  (is (= (let [repo (init-memory-repository)
+               conn (. repo (getConnection))
+               graph (build-graph
+                      [(build-uri-node "http://test.com/test-subjecta/whatever"
+                                       [(build-relation :rdf "relation-1"
+                                                        (build-literal-node "testa"))])
+                       (build-uri-node :rdf "test-subjectb"
+                                       [(build-relation :rdf "relation-2"
+                                                        (build-blank-node "testb" []))])])
+               sparql (build-query-from-template
+                       :y
+                       [{:template (build-graph
+                                    [(build-variable-node
+                                      :x [ (build-relation
+                                            :rdf "relation-1" (build-variable-node
+                                                               :y []))])])
+                         :filters []}])
+               query (. conn (prepareTupleQuery (. QueryLanguage SPARQL) sparql))]
+           (do
+             (write-graph-in-repository graph conn)
+             (let [ result  (. query (evaluate))
+                     binded (. (. result next) (getValue "y")) ]
+               (. conn (close))
+               (literal-to-string (from-sesame binded)))))
+         (literal-to-string (build-literal "testa")))))
+
+
+(deftest query-in-repository-1
+  (is (= (let [repo (init-memory-repository)
+               conn (. repo (getConnection))
+               graph (build-graph
+                      [(build-uri-node "http://test.com/test-subjecta/whatever"
+                                       [(build-relation :rdf "relation-1"
+                                                        (build-literal-node "testa"))])
+                       (build-uri-node :rdf "test-subjectb"
+                                       [(build-relation :rdf "relation-2"
+                                                        (build-blank-node "testb" []))])])]
+           (do
+             (write-graph-in-repository graph conn)
+             (let [result (query-template-in-repository
+                           :y
+                           [{:template (build-graph
+                                        [(build-variable-node
+                                          :x [ (build-relation
+                                                :rdf "relation-1" (build-variable-node
+                                                                   :y []))])])
+                             :filters []}]
+                           conn)]
+               (do
+                 (. conn (close))
+                 result))))
+         [{:y {:value "testa", :datatype {:prefix "", :value "http://www.w3.org/2001/XMLSchema#string"}, :lang ""}}])))
+
+(deftest query-in-repository-2
+  (is (= (let [repo (init-memory-repository)
+               conn (. repo (getConnection))
+               graph (build-graph
+                      [(build-uri-node "http://test.com/test-subjecta/whatever"
+                                       [(build-relation :rdf "relation-1"
+                                                        (build-literal-node "testa1"))
+                                        (build-relation :rdf "relation-2"
+                                                        (build-literal-node "testa2"))])
+                       (build-uri-node :rdf "test-subjectb"
+                                       [(build-relation :rdf "relation-2"
+                                                        (build-blank-node "testb" []))])])]
+           (do
+             (write-graph-in-repository graph conn)
+             (let [result (query-template-in-repository
+                           :y
+                           [{:template (build-graph
+                                        [(build-uri-node "http://test.com/test-subjecta/whatever"
+                                          [ (build-variable-relation
+                                                :x (build-variable-node
+                                                    :y []))])])
+                             :filters []}]
+                           conn)]
+               (do
+                 (. conn (close))
+                 result))))
+         [{:y {:value "testa2", :datatype {:prefix "", :value "http://www.w3.org/2001/XMLSchema#string"}, :lang ""}}
+          {:y {:value "testa1", :datatype {:prefix "", :value "http://www.w3.org/2001/XMLSchema#string"}, :lang ""}}])))
+
+(deftest query-in-repository-3
+  (is (= (let [repo (init-memory-repository)
+               conn (. repo (getConnection))
+               graph (build-graph
+                      [(build-uri-node "http://test.com/test-subjecta/whatever"
+                                       [(build-relation :rdf "relation-1"
+                                                        (build-literal-node "testa1"))
+                                        (build-relation :rdf "relation-2"
+                                                        (build-literal-node "testa2"))])
+                       (build-uri-node :rdf "test-subjectb"
+                                       [(build-relation :rdf "relation-2"
+                                                        (build-blank-node "testb" []))])])]
+           (do
+             (write-graph-in-repository graph conn)
+             (let [result (query-template-in-repository
+                           :x :y
+                           [{:template (build-graph
+                                        [(build-uri-node "http://test.com/test-subjecta/whatever"
+                                          [ (build-variable-relation
+                                                :x (build-variable-node
+                                                    :y []))])])
+                             :filters []}]
+                           conn)]
+               (do
+                 (. conn (close))
+                 result))))
+         [{:x {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-2"}
+           :y {:value "testa2", :datatype {:prefix "", :value "http://www.w3.org/2001/XMLSchema#string"}, :lang ""}}
+          {:x {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1"}
+           :y {:value "testa1", :datatype {:prefix "", :value "http://www.w3.org/2001/XMLSchema#string"}, :lang ""}}])))
+
+(deftest query-in-repository-4
+  (is (= (let [repo (init-memory-repository)
+               conn (. repo (getConnection))
+               graph (build-graph
+                      [(build-uri-node "http://test.com/test-subjecta/whatever"
+                                       [(build-relation :rdf "relation-1"
+                                                        (build-literal-node "testa1"))
+                                        (build-relation :rdf "relation-2"
+                                                        (build-literal-node "testa2"))])
+                       (build-uri-node :rdf "test-subjectb"
+                                       [(build-relation :rdf "relation-2"
+                                                        (build-blank-node "testb" []))])])]
+           (do
+             (write-graph-in-repository graph conn)
+             (let [result (query-template-in-repository
+                           :x :y :z
+                           [{:template (build-graph
+                                        [(build-variable-node :x
+                                          [ (build-variable-relation
+                                                :y (build-variable-node
+                                                    :z []))])])
+                             :filters []}]
+                           conn)]
+               (do
+                 (. conn (close))
+                 result))))
+         [{:z {:value "testa2", :datatype {:prefix "", :value "http://www.w3.org/2001/XMLSchema#string"}, :lang ""}
+           :y {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-2"}
+           :x {:prefix "", :value "http://test.com/test-subjecta/whatever"}}
+          {:z {:value "testa1", :datatype {:prefix "", :value "http://www.w3.org/2001/XMLSchema#string"}, :lang ""}
+           :y {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1"}
+           :x {:prefix "", :value "http://test.com/test-subjecta/whatever"}}
+          {:z {:value "testb"}
+           :y {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-2"}
+           :x {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#test-subjectb"}}])))
+
+
+(deftest template-to-graph
+  (is (= (let [repo (init-memory-repository)
+               conn (. repo (getConnection))
+               graph (build-graph
+                      [(build-uri-node "http://test.com/test-subjecta/whatever"
+                                       [(build-relation :rdf "relation-1"
+                                                        (build-literal-node "testa1"))
+                                        (build-relation :rdf "relation-2"
+                                                        (build-literal-node "testa2"))])
+                       (build-uri-node :rdf "test-subjectb"
+                                       [(build-relation :rdf "relation-2"
+                                                        (build-blank-node "testb" []))])])
+               template (build-graph-template [{:template (build-graph
+                                                           [(build-variable-node :x
+                                                                                 [ (build-variable-relation
+                                                                                    :y (build-variable-node
+                                                                                        :z []))])])
+                                                :filters []}])]
+           (do
+             (write-graph-in-repository graph conn)
+             (let [result (query-template-in-repository
+                           :x :y :z
+                           template
+                           conn)]
+               (do
+                 (. conn (close))
+                 (template-to-graph template (first result))))))
+         '{:nodes [{:value {:prefix "", :value "http://test.com/test-subjecta/whatever"}
+                    :relations ({:value {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-2"}
+                                 :object {
+                                          :value {:value "testa2", :datatype {:prefix "", :value "http://www.w3.org/2001/XMLSchema#string"}, :lang ""}
+                                          :relations []}})}]
+           :context #{}})))
