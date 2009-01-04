@@ -14,6 +14,12 @@
   (do (println msg)
       form))
 
+;; collections
+
+(defn key-for-value [the-map the-value]
+  "Returns the collection of entries holding a certain value"
+  (map (fn [e] (first e)) (filter (fn [entry] (= (val entry) the-value)) the-map)))
+
 ;; lambda things
 
 (defmacro curry [func & args]
@@ -109,4 +115,3 @@
 (deftest test-compose-filters
   (is (= (c.a_ (map (c_ + 2)) (filter (c_ = 1)) [1 2 3 4 1])
          [3 3])))
-

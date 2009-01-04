@@ -14,6 +14,8 @@
     (use :reload 'com.agh.webserver.framework.router)
     (use :reload 'com.agh.webserver.framework.persistence.rdf)
     (use :reload 'com.agh.webserver.framework.persistence.rdf.vocabularies.xsd)
+    (use :reload 'com.agh.webserver.framework.persistence.rdf.vocabularies.rdfs)
+    (use :reload 'com.agh.webserver.framework.persistence.rdf.vocabularies.owl)
     (use :reload 'com.agh.webserver.rack)))
 
 (use :reload 'com.agh.webserver.rack)

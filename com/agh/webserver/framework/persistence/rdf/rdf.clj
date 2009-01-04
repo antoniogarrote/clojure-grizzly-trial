@@ -21,20 +21,81 @@
         '(org.slf4j LoggerFactory))
 
 ;; (init-repository "com.mysql.jdbc.Driver" "jdbc:mysql://localhost:3306/clojure_sesame" "root" "root")
-(defn init-repository
+(defn init-repository!
   "Instantiates a new repository connection and stores it in
    a clojure ref"
   ([driver url login password]
-     (do (def *rdf-repository* (new SailRepository (new RdbmsStore driver url login password)))
-         (. *rdf-repository* initialize))))
+     (let [rdf-repository (new SailRepository (new RdbmsStore driver url login password))]
+       (. rdf-repository initialize))))
 
-(defn init-memory-repository
+(defn init-memory-repository!
   "Instantiates a new repository connection and stores it in
    a clojure ref"
   ([]
      (let [repo (new SailRepository (new MemoryStore))]
        (do (. repo initialize)
            repo))))
+
+(def *repositories-registry* (ref {}))
+
+(defn register-repository!
+ "Registers a repository with the given name, if no name is given
+  the repository is registered as the default repository."
+ ([name repository]
+    (dosync
+     (commute *repositories-registry*
+              (fn [registry repo]
+                (merge registry {name repo}))
+              repository)))
+ ([repository]
+    (register-repository! :default repository)))
+
+(defn default-repository
+  "Returns the default repository"
+  ([]
+     (dosync
+      (let [maybe-default (:default @*repositories-registry*)]
+        (if (nil? maybe-default)
+          ((first (keys @*repositories-registry*)) @*repositories-registry*)
+          maybe-default)))))
+
+(defn repository
+  "Returns the repository by name, if no name is given it returns the default repository"
+  ([repository-name]
+     (dosync
+      (get @*repositories-registry* repository-name)))
+  ([]
+     (default-repository)))
+
+(def *connections* (ref {}))
+
+(defn connection!
+  "Returns a connection for the requested repository, creating it if
+   necessary"
+  ([repository-name]
+     (dosync
+      (let [connection (get @*connections* repository-name)]
+        (if (nil? connection)
+          (do
+            (commute *connections*
+                     (fn [registry]
+                       (merge registry {repository-name (. (repository repository-name) getConnection)})))
+            (get @*connections* repository-name))
+          connection))))
+  ([] (connection! :default)))
+
+
+(defn close-connection!
+  "Closes the connection to a given repository or the default repository"
+  ([repository-name]
+     (dosync
+      (let [connection (get @*connections* repository-name)]
+        (if (not (nil? connection))
+          (do (dissoc @*connections* repository-name)
+              (. connection close))))))
+  ([] (close-connection! :default)))
+
+
 
 (clojure/comment
 
@@ -100,15 +161,23 @@
   "RDF namespace: http://www.w3.org/1999/02/22-rdf-syntax-ns#"
   (build-uri "http://www.w3.org/1999/02/22-rdf-syntax-ns#" :rdf))
 
+
+(defn rdf-type []
+  (build-uri (rdf-ns :rdf) "type"))
+
+;; Basic RDF blocks
 (defn uri-to-string
   "Translates a URI into its string representation looking for the namespace"
-  ([uri] (if (= (:prefix uri) "")
-           (:value uri)
-           (if (= (class (:prefix uri)) #=java.lang.String)
-                  (str (:prefix uri) (:value uri))
-                  (let [ns (rdf-ns (:prefix uri))
-                        pref-ns (:prefix ns)]
-                    (str pref-ns (:value uri)))))))
+  ([uri]
+     (if (= (class uri) #=java.lang.String) ;; are they sending us a string, then it must be an URI
+       uri
+       (if (= (:prefix uri) "") ;; then we have to build the URI string representation
+         (:value uri)
+         (if (= (class (:prefix uri)) #=java.lang.String)
+           (str (:prefix uri) (:value uri))
+           (let [ns (rdf-ns (:prefix uri))
+                 pref-ns (:prefix ns)]
+             (str pref-ns (:value uri))))))))
 
 ;; literals
 (defn build-literal
@@ -167,9 +236,16 @@
   ([prefix value preds]
      (build-node (build-uri prefix value) :uri-node preds))
   ([value  preds]
+     (if (= (class preds) #=java.lang.String) ;; special case where 2 args can be a tow part uri -> (:ns ref) not (uri preds)
+       (build-node (build-uri value preds) :uri-node [])
+       (if (= (rdf-meta value) :uri)
+         (build-node value :uri-node preds)
+         (build-node (build-uri value) :uri-node preds))))
+  ([value]
      (if (= (rdf-meta value) :uri)
-       (build-node value :uri-node preds)
-       (build-node (build-uri value) :uri-node preds))))
+       (build-node value :uri-node [])
+       (build-node (build-uri value) :uri-node []))))
+
 
 (defn build-literal-node
   "Builds a new node storing a literal"
@@ -571,7 +647,6 @@
            args (collect-vars bindings-list)]
        (prepare-query-from-template args templates bindings))))
 ;;;;;;;;;;;;;;;;;;;;;;;;
-(use 'com.agh.utils)
 (defn query-template-in-repository
   "Queries the repository with the provided template"
     ([& args]
@@ -692,6 +767,56 @@
 
 (use 'clojure.contrib.test-is)
 
+(defn repositories-register-restore!
+  "A helper function for testing without losing the repository-register in the test"
+  ([repositories-to-restore]
+     (dosync
+      (commute *repositories-registry*
+               (fn [repositories-registry]
+                 repositories-to-restore)))))
+
+(defn connections-restore!
+  "A helper function for testing without losing the connections registry in the test"
+  ([connections-to-restore]
+     (dosync
+      (commute *connections*
+               (fn [connections]
+                 connections-to-restore)))))
+
+(deftest test-register-repository
+  (let [repo (init-memory-repository!)
+        original @*repositories-registry*]
+    (do (register-repository! :test repo)
+        (is (= (repository :test)
+               repo))
+        (is (= (repository)
+               repo))
+        (repositories-register-restore! original))))
+
+(deftest test-register-default-repository
+  (let [repo (init-memory-repository!)
+        original @*repositories-registry*]
+    (do (register-repository! repo)
+        (is (= (repository :default)
+               repo))
+        (is (= (repository)
+               repo))
+        (repositories-register-restore! original))))
+
+(deftest test-connection
+  (let [repo (init-memory-repository!)
+        original @*repositories-registry*
+        original-conn @*connections*]
+    (do (register-repository! :test repo)
+        (let [conn (connection! :test)]
+          (is (not (= conn nil)))
+          (is (= (class conn)
+                  #=org.openrdf.repository.sail.SailRepositoryConnection)))
+        (close-connection! :test)
+        (repositories-register-restore! original)
+        (connections-restore! original-conn))))
+
+
 (defn mock-namespace [& parts]
   (if (nil? parts)
     (struct xml-namespace "http://test.com/" :test)
@@ -724,6 +849,10 @@
 (deftest test-ns-1
   (is (= (rdf-ns :rdf)
          {:prefix "http://www.w3.org/1999/02/22-rdf-syntax-ns#", :value :rdf})))
+
+(deftest test-rdf-type
+  (is (= (rdf-type)
+         {:prefix :rdf, :value "type"})))
 
 (deftest test-literal-1
   (is (= (build-literal "a")
@@ -795,6 +924,21 @@
                                 :value {:prefix :b, :value "test"}}}]
           :value {:prefix :a, :value "test"}})))
 
+(deftest test-build-uri-node-1
+  (is (= (build-uri-node "http://test.com")
+         {:relations []
+          :value {:prefix "", :value "http://test.com"}})))
+
+(deftest test-build-uri-node-2
+  (is (= (build-uri-node (build-uri :rdf "a"))
+         {:relations []
+          :value {:prefix :rdf, :value "a"}})))
+
+(deftest test-build-uri-node-3
+  (is (= (build-uri-node :rdf "a")
+         {:relations []
+          :value {:prefix :rdf, :value "a"}})))
+
 (deftest test-build-node-literal-1
   (is (= (build-literal-node "test")
        {:value {:value "test", :datatype {:prefix :xsd, :value "string"}, :lang ""}, :relations []})))
@@ -808,7 +952,7 @@
          {:rdf :blank-node})))
 
 (deftest test-sesame-translate-uri
-  (let [repo (init-memory-repository)
+  (let [repo (init-memory-repository!)
         conn (. repo (getConnection))]
     (do
       (is (= (. (sesame-translate (build-uri (rdf-ns :rdf) "test") (. conn (getValueFactory)))
@@ -817,7 +961,7 @@
       (. conn (close)))))
 
 (deftest test-sesame-translate-literal-1
-  (let [repo (init-memory-repository)
+  (let [repo (init-memory-repository!)
         conn (. repo (getConnection))]
     (do
       (is (= (. (sesame-translate (build-literal "test") (. conn (getValueFactory)))
@@ -826,7 +970,7 @@
       (. conn (close)))))
 
 (deftest test-sesame-translate-literal-2
-  (let [repo (init-memory-repository)
+  (let [repo (init-memory-repository!)
         conn (. repo (getConnection))]
     (do
       (is (= (. (sesame-translate (build-literal "test") (. conn (getValueFactory)))
@@ -835,7 +979,7 @@
       (. conn (close)))))
 
 (deftest test-sesame-translate-relation-1
-  (let [repo (init-memory-repository)
+  (let [repo (init-memory-repository!)
         conn (. repo (getConnection))]
     (do
       (is (= (. (sesame-translate (build-relation (rdf-ns :rdf) "test" (build-literal "testPredicate")) (. conn (getValueFactory)))
@@ -844,7 +988,7 @@
       (. conn (close)))))
 
 (deftest test-sesame-translate-relation-2
-  (let [repo (init-memory-repository)
+  (let [repo (init-memory-repository!)
         conn (. repo (getConnection))]
     (do
       (is (= (meta (sesame-translate (build-relation (rdf-ns :rdf) "test" (build-literal "testPredicate")) (. conn (getValueFactory))))
@@ -852,7 +996,7 @@
       (. conn (close)))))
 
 (deftest test-sesame-translate-uri-node-1
-  (let [repo (init-memory-repository)
+  (let [repo (init-memory-repository!)
         conn (. repo (getConnection))]
     (do
       (is (= (. (sesame-translate (build-uri-node :rdf "test" [(build-relation :rdf "test" (build-uri-node :rdf "test" []))]) (. conn (getValueFactory)))
@@ -861,7 +1005,7 @@
       (. conn (close)))))
 
 (deftest test-sesame-translate-uri-node-2
-  (let [repo (init-memory-repository)
+  (let [repo (init-memory-repository!)
         conn (. repo (getConnection))]
     (do
       (is (= (meta (sesame-translate (build-uri-node :rdf "test" [(build-relation :rdf "test" (build-uri-node :rdf "test" []))]) (. conn (getValueFactory))))
@@ -869,7 +1013,7 @@
       (. conn (close)))))
 
 (deftest test-sesame-translate-literal-node-1
-  (let [repo (init-memory-repository)
+  (let [repo (init-memory-repository!)
         conn (. repo (getConnection))]
     (do
       (is (= (. (sesame-translate (build-literal-node "test") (. conn (getValueFactory)))
@@ -878,7 +1022,7 @@
       (. conn (close)))))
 
 (deftest test-sesame-translate-literal-node-2
-  (let [repo (init-memory-repository)
+  (let [repo (init-memory-repository!)
         conn (. repo (getConnection))]
     (do
       (is (= (meta (sesame-translate (build-literal-node "test") (. conn (getValueFactory))))
@@ -886,7 +1030,7 @@
       (. conn (close)))))
 
 (deftest test-sesame-translate-triplet-1
-  (let [repo (init-memory-repository)
+  (let [repo (init-memory-repository!)
         conn (. repo (getConnection))]
     (do
       (is (= (str (sesame-translate (with-meta (struct rdf-triplet
@@ -981,7 +1125,7 @@
            :context #{}})))
 
 (deftest write-to-repository
-  (let [repo (init-memory-repository)
+  (let [repo (init-memory-repository!)
         conn (. repo (getConnection))
         graph (build-graph
                        [(build-uri-node :rdf "test-subjecta"
@@ -1107,7 +1251,7 @@
 
 (use 'com.agh.utils)
 (deftest query-repository-1
-  (is (= (let [repo (init-memory-repository)
+  (is (= (let [repo (init-memory-repository!)
                conn (. repo (getConnection))
                graph (build-graph
                       [(build-uri-node "http://test.com/test-subjecta/whatever"
@@ -1134,7 +1278,7 @@
          (build-bnode-identifier "testa"))))
 
 (deftest query-repository-2
-  (is (= (let [repo (init-memory-repository)
+  (is (= (let [repo (init-memory-repository!)
                conn (. repo (getConnection))
                graph (build-graph
                       [(build-uri-node "http://test.com/test-subjecta/whatever"
@@ -1161,7 +1305,7 @@
          "http://test.com/test-subjecta/whatever")))
 
 (deftest query-repository-3
-  (is (= (let [repo (init-memory-repository)
+  (is (= (let [repo (init-memory-repository!)
                conn (. repo (getConnection))
                graph (build-graph
                       [(build-uri-node "http://test.com/test-subjecta/whatever"
@@ -1189,7 +1333,7 @@
 
 
 (deftest query-in-repository-1
-  (is (= (let [repo (init-memory-repository)
+  (is (= (let [repo (init-memory-repository!)
                conn (. repo (getConnection))
                graph (build-graph
                       [(build-uri-node "http://test.com/test-subjecta/whatever"
@@ -1215,105 +1359,105 @@
          [{:y {:value "testa", :datatype {:prefix "", :value "http://www.w3.org/2001/XMLSchema#string"}, :lang ""}}])))
 
 (deftest query-in-repository-2
-  (is (= (let [repo (init-memory-repository)
-               conn (. repo (getConnection))
-               graph (build-graph
-                      [(build-uri-node "http://test.com/test-subjecta/whatever"
-                                       [(build-relation :rdf "relation-1"
-                                                        (build-literal-node "testa1"))
-                                        (build-relation :rdf "relation-2"
-                                                        (build-literal-node "testa2"))])
-                       (build-uri-node :rdf "test-subjectb"
-                                       [(build-relation :rdf "relation-2"
-                                                        (build-blank-node "testb" []))])])]
-           (do
-             (write-graph-in-repository graph conn)
-             (let [result (query-template-in-repository
-                           :y
-                           [{:template (build-graph
-                                        [(build-uri-node "http://test.com/test-subjecta/whatever"
-                                          [ (build-variable-relation
-                                                :x (build-variable-node
-                                                    :y []))])])
-                             :filters []}]
-                           conn)]
-               (do
-                 (. conn (close))
-                 result))))
-         [{:y {:value "testa2", :datatype {:prefix "", :value "http://www.w3.org/2001/XMLSchema#string"}, :lang ""}}
-          {:y {:value "testa1", :datatype {:prefix "", :value "http://www.w3.org/2001/XMLSchema#string"}, :lang ""}}])))
+  (is (= (set (let [repo (init-memory-repository!)
+                    conn (. repo (getConnection))
+                    graph (build-graph
+                           [(build-uri-node "http://test.com/test-subjecta/whatever"
+                                            [(build-relation :rdf "relation-1"
+                                                             (build-literal-node "testa1"))
+                                             (build-relation :rdf "relation-2"
+                                                             (build-literal-node "testa2"))])
+                            (build-uri-node :rdf "test-subjectb"
+                                            [(build-relation :rdf "relation-2"
+                                                             (build-blank-node "testb" []))])])]
+                (do
+                  (write-graph-in-repository graph conn)
+                  (let [result (query-template-in-repository
+                                :y
+                                [{:template (build-graph
+                                             [(build-uri-node "http://test.com/test-subjecta/whatever"
+                                                              [ (build-variable-relation
+                                                                 :x (build-variable-node
+                                                                     :y []))])])
+                                  :filters []}]
+                                conn)]
+                    (do
+                      (. conn (close))
+                      result)))))
+         (set [{:y {:value "testa2", :datatype {:prefix "", :value "http://www.w3.org/2001/XMLSchema#string"}, :lang ""}}
+               {:y {:value "testa1", :datatype {:prefix "", :value "http://www.w3.org/2001/XMLSchema#string"}, :lang ""}}]))))
 
 (deftest query-in-repository-3
-  (is (= (let [repo (init-memory-repository)
-               conn (. repo (getConnection))
-               graph (build-graph
-                      [(build-uri-node "http://test.com/test-subjecta/whatever"
-                                       [(build-relation :rdf "relation-1"
-                                                        (build-literal-node "testa1"))
-                                        (build-relation :rdf "relation-2"
-                                                        (build-literal-node "testa2"))])
-                       (build-uri-node :rdf "test-subjectb"
-                                       [(build-relation :rdf "relation-2"
-                                                        (build-blank-node "testb" []))])])]
-           (do
-             (write-graph-in-repository graph conn)
-             (let [result (query-template-in-repository
-                           :x :y
-                           [{:template (build-graph
-                                        [(build-uri-node "http://test.com/test-subjecta/whatever"
-                                          [ (build-variable-relation
-                                                :x (build-variable-node
-                                                    :y []))])])
-                             :filters []}]
-                           conn)]
-               (do
-                 (. conn (close))
-                 result))))
-         [{:x {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-2"}
-           :y {:value "testa2", :datatype {:prefix "", :value "http://www.w3.org/2001/XMLSchema#string"}, :lang ""}}
-          {:x {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1"}
-           :y {:value "testa1", :datatype {:prefix "", :value "http://www.w3.org/2001/XMLSchema#string"}, :lang ""}}])))
+  (is (= (set (let [repo (init-memory-repository!)
+                    conn (. repo (getConnection))
+                    graph (build-graph
+                           [(build-uri-node "http://test.com/test-subjecta/whatever"
+                                            [(build-relation :rdf "relation-1"
+                                                             (build-literal-node "testa1"))
+                                             (build-relation :rdf "relation-2"
+                                                             (build-literal-node "testa2"))])
+                            (build-uri-node :rdf "test-subjectb"
+                                            [(build-relation :rdf "relation-2"
+                                                             (build-blank-node "testb" []))])])]
+                (do
+                  (write-graph-in-repository graph conn)
+                  (let [result (query-template-in-repository
+                                :x :y
+                                [{:template (build-graph
+                                             [(build-uri-node "http://test.com/test-subjecta/whatever"
+                                                              [ (build-variable-relation
+                                                                 :x (build-variable-node
+                                                                     :y []))])])
+                                  :filters []}]
+                                conn)]
+                    (do
+                      (. conn (close))
+                      result)))))
+         (set [{:x {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-2"}
+                :y {:value "testa2", :datatype {:prefix "", :value "http://www.w3.org/2001/XMLSchema#string"}, :lang ""}}
+               {:x {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1"}
+                :y {:value "testa1", :datatype {:prefix "", :value "http://www.w3.org/2001/XMLSchema#string"}, :lang ""}}]))))
 
 (deftest query-in-repository-4
-  (is (= (let [repo (init-memory-repository)
-               conn (. repo (getConnection))
-               graph (build-graph
-                      [(build-uri-node "http://test.com/test-subjecta/whatever"
-                                       [(build-relation :rdf "relation-1"
-                                                        (build-literal-node "testa1"))
-                                        (build-relation :rdf "relation-2"
-                                                        (build-literal-node "testa2"))])
-                       (build-uri-node :rdf "test-subjectb"
-                                       [(build-relation :rdf "relation-2"
-                                                        (build-blank-node "testb" []))])])]
-           (do
-             (write-graph-in-repository graph conn)
-             (let [result (query-template-in-repository
-                           :x :y :z
-                           [{:template (build-graph
-                                        [(build-variable-node :x
-                                          [ (build-variable-relation
-                                                :y (build-variable-node
-                                                    :z []))])])
-                             :filters []}]
-                           conn)]
-               (do
-                 (. conn (close))
-                 result))))
-         [{:z {:value "testa2", :datatype {:prefix "", :value "http://www.w3.org/2001/XMLSchema#string"}, :lang ""}
-           :y {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-2"}
-           :x {:prefix "", :value "http://test.com/test-subjecta/whatever"}}
-          {:z {:value "testa1", :datatype {:prefix "", :value "http://www.w3.org/2001/XMLSchema#string"}, :lang ""}
-           :y {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1"}
-           :x {:prefix "", :value "http://test.com/test-subjecta/whatever"}}
-          {:z {:value "testb"}
-           :y {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-2"}
-           :x {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#test-subjectb"}}])))
+  (is (= (set (let [repo (init-memory-repository!)
+                    conn (. repo (getConnection))
+                    graph (build-graph
+                           [(build-uri-node "http://test.com/test-subjecta/whatever"
+                                            [(build-relation :rdf "relation-1"
+                                                             (build-literal-node "testa1"))
+                                             (build-relation :rdf "relation-2"
+                                                             (build-literal-node "testa2"))])
+                            (build-uri-node :rdf "test-subjectb"
+                                            [(build-relation :rdf "relation-2"
+                                                             (build-blank-node "testb" []))])])]
+                (do
+                  (write-graph-in-repository graph conn)
+                  (let [result (query-template-in-repository
+                                :x :y :z
+                                [{:template (build-graph
+                                             [(build-variable-node :x
+                                                                   [ (build-variable-relation
+                                                                      :y (build-variable-node
+                                                                          :z []))])])
+                                  :filters []}]
+                                conn)]
+                    (do
+                      (. conn (close))
+                      result)))))
+         (set [{:z {:value "testb"}
+                :x {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#test-subjectb"}
+                :y {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-2"}}
+               {:z {:value "testa2", :datatype {:prefix "", :value "http://www.w3.org/2001/XMLSchema#string"}, :lang ""}
+                :x {:prefix "", :value "http://test.com/test-subjecta/whatever"}
+                :y {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-2"}}
+               {:z {:value "testa1", :datatype {:prefix "", :value "http://www.w3.org/2001/XMLSchema#string"}, :lang ""}
+                :x {:prefix "", :value "http://test.com/test-subjecta/whatever"}
+                :y {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1"}}]))))
 
 
-(deftest template-to-graph
-  (is (= (let [repo (init-memory-repository)
-               conn (. repo (getConnection))
+(deftest test-template-to-graph
+  (is (= (let [repo (init-memory-repository!)
+               conn (. repo getConnection)
                graph (build-graph
                       [(build-uri-node "http://test.com/test-subjecta/whatever"
                                        [(build-relation :rdf "relation-1"
@@ -1336,11 +1480,14 @@
                            template
                            conn)]
                (do
-                 (. conn (close))
-                 (template-to-graph template (first result))))))
-         '{:nodes [{:value {:prefix "", :value "http://test.com/test-subjecta/whatever"}
-                    :relations ({:value {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-2"}
-                                 :object {
-                                          :value {:value "testa2", :datatype {:prefix "", :value "http://www.w3.org/2001/XMLSchema#string"}, :lang ""}
-                                          :relations []}})}]
-           :context #{}})))
+                 (. conn close)
+                 (set result)))))
+         (set [{:z {:value "testa2", :datatype {:prefix "", :value "http://www.w3.org/2001/XMLSchema#string"}, :lang ""}
+                :x {:prefix "", :value "http://test.com/test-subjecta/whatever"}
+                :y {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-2"}}
+               {:z {:value "testa1", :datatype {:prefix "", :value "http://www.w3.org/2001/XMLSchema#string"}, :lang ""}
+                :x {:prefix "", :value "http://test.com/test-subjecta/whatever"}
+                :y {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1"}}
+               {:z {:value "testb"}
+                :x {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#test-subjectb"}
+                :y {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-2"}}]))))
