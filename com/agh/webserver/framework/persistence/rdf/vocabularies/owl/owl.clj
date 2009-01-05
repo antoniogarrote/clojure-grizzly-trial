@@ -118,6 +118,37 @@
      (build-uri-node prefix value
                      [(build-relation (rdf-type) (build-uri-node :owl "ObjectProperty" []))])))
 
+(defn describe-owl-object-property-range
+  "Generates a RDF graph describing the range of an object property"
+  ([value-property value-range]
+     (build-uri-node value-property
+                     [(build-relation (rdfs-range) (build-uri-node value-range))]))
+  ([value-a value-b value-c]
+     (if (= (class value-a) #=clojure.lang.Keyword)
+       (build-uri-node value-a value-b
+                       [(build-relation (rdfs-range) (build-uri-node value-c))])
+       (build-uri-node value-a
+                       [(build-relation (rdfs-range) (build-uri-node value-b value-c))])))
+  ([prefix-property value-property prefix-object value-object]
+     (build-uri-node prefix-property value-property
+                     [(build-relation (rdfs-range) (build-uri-node prefix-object value-object))])))
+
+(defn describe-owl-object-property-and-range
+  "Generates a RDF graph describing an object property"
+  ([property range]
+     (do (describe-owl-object-property property)
+         (describe-owl-object-property-range property range)))
+  ([value-a value-b value-c]
+     (if (= (class value-a) #=clojure.lang.Keyword)
+       (do (describe-owl-object-property value-a value-b)
+           (describe-owl-object-property-range value-a value-b value-c))
+       (do (describe-owl-object-property value-a)
+           (describe-owl-object-property-range value-a value-b value-c))))
+  ([property-prefix property-value range-prefix range-value]
+     (do (describe-owl-object-property property-prefix property-value)
+         (describe-owl-object-property-range property-prefix property-value range-prefix range-value))))
+
+
 (defn describe-owl-equivalent-properties
   "Generates a RDF graph describing equivalency between properties"
   ([prefix-a value-a prefix-b value-b]
@@ -286,7 +317,7 @@
                          connection (connection! repository-name)
                          datatype (retrieve-owl-range-for-property datatype-property-uri connection)
                          equivalent-properties (retrieve-owl-equivalent-properties-for-property datatype-property-uri connection)
-                         name (key-for-value (:names tbox) datatype-property-uri)
+                         name (key-for-value (:names tbox) (uri-to-string datatype-property-uri))
                          property (struct owl-datatype-property
                                           (if (= name nil) nil (first name))
                                           datatype-property-uri
@@ -310,7 +341,7 @@
                    (let [repository-name (get (:repositories tbox) (uri-to-string property-uri))
                          connection (connection! repository-name)
                          equivalent-properties (retrieve-owl-equivalent-properties-for-property property-uri connection)
-                         name (key-for-value (:names tbox) object-property-uri)
+                         name (key-for-value (:names tbox) (uri-to-string object-property-uri))
                          property (struct owl-object-property
                                           (if (= name nil) nil (first name))
                                           property-uri
@@ -322,6 +353,74 @@
                    tbox))
                object-property-uri)
       (get (:uris @*tbox*) object-property-uri))))
+
+(defn tbox-find-class-by-uri!
+  "Try to find an OWL class in a repository and stores it in the TBox"
+  ([class-uri]
+     (dosync
+      (when (nil? (get (:uris @*tbox*) (uri-to-string class-uri)))
+        (let [repository-name (get (:repositories @*tbox*) (uri-to-string class-uri))
+              connection (connection! repository-name)
+              name (key-for-value (:names @*tbox*) (uri-to-string class-uri))
+              superclasses-uri (retrieve-owl-superclasses-for-class class-uri connection)
+              superclasses (set
+                            (loop [sc []
+                                   sc-uri superclasses-uri]
+                              (if (empty? sc-uri)
+                                sc
+                                (recur (conj sc (tbox-find-class-by-uri! (first sc-uri))) (rest sc-uri)))))
+
+              base-datatype-properties (set
+                                        (map
+                                         (fn [prop] (tbox-find-datatype-property-by-uri! prop))
+                                         (loop [props (set [])
+                                                classes (conj superclasses-uri class-uri)]
+                                           (if (empty? classes)
+                                             props
+                                             (let [class-to-look (first classes)
+                                                   props-found (retrieve-owl-datatype-properties-for-class  class-to-look connection)]
+                                               (recur (clojure.set/union props props-found)
+                                                      (rest classes)))))))
+              base-object-properties (set
+                                      (map
+                                       (fn [prop] (tbox-find-object-property-by-uri! prop))
+                                       (loop [props (set [])
+                                              classes (conj superclasses-uri class-uri)]
+                                         (if (empty? classes)
+                                           props
+                                           (let [class-to-look (first classes)
+                                                 props-found (retrieve-owl-object-properties-for-class  class-to-look connection)]
+                                             (recur (clojure.set/union props props-found)
+                                                    (rest classes)))))))
+              class (struct owl-class
+                            (if (= name nil) nil (first name))
+                            class-uri
+                            superclasses
+                            base-datatype-properties
+                            base-object-properties
+                            repository-name)]
+          (commute *tbox*
+                   (fn [tbox]
+                     {:names (:names tbox)
+                      :uris (merge (:uris tbox) {class-uri class})
+                      :repositories (:repositories tbox)}))))
+      (get (:uris @*tbox*) class-uri))))
+
+(defn tbox-find-datatype-property!
+  "Finds a datatype property in the TBox by the name used to register it"
+  ([name]
+     (dosync (tbox-find-datatype-property-by-uri! (get (:names @*tbox*) name)))))
+
+(defn tbox-find-object-property!
+  "Finds an object property in the TBox by the name used to register it"
+  ([name]
+     (dosync (tbox-find-object-property-by-uri! (get (:names @*tbox*) name)))))
+
+(defn tbox-find-class!
+  "Finds a class in the TBox by the name used to register it"
+  ([name]
+     (dosync (tbox-find-class-by-uri! (get (:names @*tbox*) name)))))
+
 
 (defn tbox-register-name!
   "Maps a name to an URI in the TBox"
@@ -361,59 +460,6 @@
       (commute *tbox*
                (fn [tbox]
                  {:names {} :uris {} :repositories {}})))))
-
-
-
-(defn tbox-find-class-by-uri!
-  "Try to find an OWL class in a repository and stores it in the TBox"
-  ([class-uri]
-     (dosync
-      (when (nil? (get (:uris @*tbox*) (uri-to-string class-uri)))
-        (let [repository-name (get (:repositories @*tbox*) (uri-to-string class-uri))
-              connection (connection! repository-name)
-              name (key-for-value (:names @*tbox*) class-uri)
-              superclasses-uri (retrieve-owl-superclasses-for-class class-uri connection)
-              superclasses (loop [sc []
-                                  sc-uri superclasses-uri]
-                             (if (empty? sc-uri)
-                               sc
-                               (recur (conj sc (tbox-find-class-by-uri! (first sc-uri))) (rest sc-uri))))
-
-              base-datatype-properties (set
-                                        (map
-                                         (fn [prop] (tbox-find-datatype-property-by-uri! prop))
-                                         (loop [props (set [])
-                                                classes (conj superclasses-uri class-uri)]
-                                           (if (empty? classes)
-                                             props
-                                             (let [class-to-look (first classes)
-                                                   props-found (retrieve-owl-datatype-properties-for-class  class-to-look connection)]
-                                               (recur (clojure.set/union props props-found)
-                                                      (rest classes)))))))
-              base-object-properties (set
-                                      (map
-                                       (fn [prop] (tbox-find-object-property-by-uri! prop))
-                                       (loop [props (set [])
-                                              classes (conj superclasses-uri class-uri)]
-                                         (if (empty? classes)
-                                           props
-                                           (let [class-to-look (first classes)
-                                                 props-found (retrieve-owl-object-properties-for-class  class-to-look connection)]
-                                             (recur (clojure.set/union props props-found)
-                                                    (rest classes)))))))
-              class (struct owl-class
-                            (if (= name nil) nil (first name))
-                            class-uri
-                            superclasses
-                            base-datatype-properties
-                            base-object-properties
-                            repository-name)]
-          (commute *tbox*
-                   (fn [tbox]
-                     {:names (:names tbox)
-                      :uris (merge (:uris tbox) {class-uri class})
-                      :repositories (:repositories tbox)}))))
-      (get (:uris @*tbox*) class-uri))))
 
 
 
@@ -513,6 +559,18 @@
            :relations [{:value {:prefix :rdf, :value "type"}
                         :object {:value {:prefix :owl, :value "ObjectProperty"}
                                  :relations []}}]})))
+
+(deftest describe-owl-object-property-range-1
+  (is (= (describe-owl-object-property-range :rdf "property" :rdf "object")
+         {:value {:prefix :rdf, :value "property"}
+          :relations [{:value {:prefix :rdfs, :value "range"}
+                       :object {:value {:prefix :rdf, :value "object"}, :relations []}}]})))
+
+(deftest describe-owl-object-property-range-2
+  (is (= (describe-owl-object-property-range "http://test.com/property" "http://test.com/object")
+         {:value {:prefix "", :value "http://test.com/property"}
+          :relations [{:value {:prefix :rdfs, :value "range"}
+                       :object {:value {:prefix "", :value "http://test.com/object"}, :relations []}}]})))
 
 (deftest describe-owl-equivalent-properties-1
   (is (= (describe-owl-equivalent-properties :rdf "parent" :rdf "child")
@@ -667,45 +725,42 @@
                  tbox-to-restore)))))
 
 (deftest test-tbox-register-name-1
-  (let [orig-tbox @*tbox*]
-    (do (tbox-clear!)
-        (tbox-register-name! :test "http://test.com")
-        (let [new-tbox @*tbox*]
-          (do
-            (tbox-restore! orig-tbox)
-            (is (= new-tbox
-                   {:repositories {"http://test.com" :default}
-                    :names {:test "http://test.com"}
-                    :uris {}})))))))
+  (do (tbox-clear!)
+      (repositories-registry-clear!)
+      (connections-clear!)
+      (tbox-register-name! :test "http://test.com")
+      (let [new-tbox @*tbox*]
+        (do
+          (is (= new-tbox
+                 {:repositories {"http://test.com" :default}
+                  :names {:test "http://test.com"}
+                  :uris {}}))))))
 
 (deftest test-tbox-register-name-2
-  (let [orig-tbox @*tbox*]
-    (do (tbox-clear!)
-        (tbox-register-name! :test (build-uri :rdf "a"))
-        (let [new-tbox @*tbox*]
-          (do
-            (tbox-restore! orig-tbox)
-            (is (= new-tbox
-                   {:names {:test (uri-to-string (build-uri :rdf "a"))} :uris {} :repositories {(uri-to-string (build-uri :rdf "a")) :default}})))))))
+  (do (tbox-clear!)
+      (repositories-registry-clear!)
+      (connections-clear!)
+      (tbox-register-name! :test (build-uri :rdf "a"))
+      (let [new-tbox @*tbox*]
+        (do
+          (is (= new-tbox
+                 {:names {:test (uri-to-string (build-uri :rdf "a"))} :uris {} :repositories {(uri-to-string (build-uri :rdf "a")) :default}}))))))
 
 (deftest test-tbox-find-datatype-property-by-uri
-  (let [orig-tbox @*tbox*
-        orig-conn @*connections*
-        orig-repos @*repositories-registry*
-        repo (init-memory-repository!)
+  (let [repo (init-memory-repository!)
         graph (describe-tbox
                (describe-owl-datatype-property "http://test.com/prop_a" (xsd-float))
                (describe-owl-datatype-property "http://test.com/prop_b" (xsd-float))
                (describe-owl-datatype-property "http://test.com/prop_c" (xsd-float))
                (describe-owl-equivalent-properties "http://test.com/prop_a" "http://test.com/prop_c"))]
     (do (tbox-clear!)
+        (repositories-registry-clear!)
+        (connections-clear!)
         (register-repository! :test repo)
         (write-graph-in-repository graph (connection! :test))
         (tbox-register-name! :prop_a "http://test.com/prop_a" :test)
         (let [property (tbox-find-datatype-property-by-uri! "http://test.com/prop_a")]
-          (do (tbox-restore! orig-tbox)
-              (repositories-register-restore! orig-repos)
-              (connections-restore! orig-conn)
+          (do (close-connection! (connection! :test))
               (is (= property
                      {:name :prop_a
                       :uri "http://test.com/prop_a"
@@ -714,34 +769,28 @@
                       :repository-name :test})))))))
 
 (deftest test-tbox-find-object-property-by-uri
-  (let [orig-tbox @*tbox*
-        orig-conn @*connections*
-        orig-repos @*repositories-registry*
-        repo (init-memory-repository!)
+  (let [repo (init-memory-repository!)
         graph (describe-tbox
                (describe-owl-object-property "http://test.com/prop_a" (xsd-float))
                (describe-owl-object-property "http://test.com/prop_b" (xsd-float))
                (describe-owl-object-property "http://test.com/prop_c" (xsd-float))
                (describe-owl-equivalent-properties "http://test.com/prop_a" "http://test.com/prop_c"))]
     (do (tbox-clear!)
+        (repositories-registry-clear!)
+        (connections-clear!)
         (register-repository! :test repo)
         (write-graph-in-repository graph (connection! :test))
         (tbox-register-name! :prop_a "http://test.com/prop_a" :test)
         (let [property (tbox-find-object-property-by-uri! "http://test.com/prop_a")]
-          (do (tbox-restore! orig-tbox)
-              (repositories-register-restore! orig-repos)
-              (connections-restore! orig-conn)
+          (do (close-connection! (connection! :test))
               (is (= property
                      {:name :prop_a
                       :uri "http://test.com/prop_a"
                       :equivalent-properties #{{:prefix "", :value "http://test.com/prop_c"}}
                       :repository-name :test})))))))
 
-(deftest test-class-subclassing
-  (let [orig-tbox @*tbox*
-        orig-conn @*connections*
-        orig-repos @*repositories-registry*
-        repo (init-memory-repository!)
+(deftest test-find-class-by-uri-1
+  (let [repo (init-memory-repository!)
         graph (describe-tbox
                (describe-owl-datatype-property "http://test.com/prop_a" (xsd-float))
                (describe-owl-datatype-property "http://test.com/prop_b" (xsd-float))
@@ -751,8 +800,16 @@
                (describe-owl-subclass "http://test.com/class_a" "http://test.com/class_b")
                (describe-owl-subclass "http://test.com/class_a" "http://test.com/class_c")
                (describe-owl-class-has-property "http://test.com/class_a" "http://test.com/prop_a")
-               (describe-owl-class-has-property "http://test.com/class_b" "http://test.com/prop_b"))]
+               (describe-owl-class-has-property "http://test.com/class_b" "http://test.com/prop_b"))
+        test-template (build-graph-template
+                       [{:template (build-graph
+                                    [(build-variable-node :subject
+                                                          [(build-variable-relation :predicate
+                                                                         (build-variable-node :object))])])
+                         :filters []}])]
     (do (tbox-clear!)
+        (repositories-registry-clear!)
+        (connections-clear!)
         (register-repository! :test repo)
         (write-graph-in-repository graph (connection! :test))
         (tbox-register-name! :owl-thing (owl-Thing) :test)
@@ -762,49 +819,48 @@
         (tbox-register-name! :prop_a "http://test.com/prop_a" :test)
         (tbox-register-name! :prop_b "http://test.com/prop_b" :test)
         (let [class-recovered (tbox-find-class-by-uri! "http://test.com/class_a")]
-          (do (println (str "\n\n\nEL RESULTADO:\n" class-recovered "\n\n"))
-              (is (= class-recovered
+          (do (is (= class-recovered
                      {:name :class_a
                       :uri "http://test.com/class_a"
-                      :subclass-of [{:name nil
-                                     :uri {:prefix "", :value "http://www.w3.org/2002/07/owl#Thing"}
-                                     :subclass-of []
-                                     :datatype-properties #{}
-                                     :object-properties #{}
-                                     :repository-name :test}
-                                    {:name nil
-                                     :uri {:prefix "", :value "http://test.com/class_b"}
-                                     :subclass-of [{:name nil
-                                                    :uri {:prefix "", :value "http://www.w3.org/2002/07/owl#Thing"}
-                                                    :subclass-of []
-                                                    :datatype-properties #{}
-                                                    :object-properties #{}
-                                                    :repository-name :test}]
-                                     :datatype-properties #{{:name nil
-                                                             :uri
-                                                             {:prefix "", :value "http://test.com/prop_b"}
-                                                             :range {:prefix "", :value "http://www.w3.org/2001/XMLSchema#float"}
-                                                             :equivalent-properties #{}
-                                                             :repository-name :test}}
-                                     :object-properties #{}
-                                     :repository-name :test}
-                                    {:name nil
-                                     :uri {:prefix "", :value "http://test.com/class_c"}
-                                     :subclass-of [{:name nil
-                                                    :uri {:prefix "", :value "http://www.w3.org/2002/07/owl#Thing"}
-                                                    :subclass-of []
-                                                    :datatype-properties #{}
-                                                    :object-properties #{}
-                                                    :repository-name :test}]
-                                     :datatype-properties #{}
-                                     :object-properties #{}
-                                     :repository-name :test}]
-                      :datatype-properties #{{:name nil
+                      :subclass-of #{{:name :owl-thing
+                                      :uri {:prefix "", :value "http://www.w3.org/2002/07/owl#Thing"}
+                                      :subclass-of #{}
+                                      :datatype-properties #{}
+                                      :object-properties #{}
+                                      :repository-name :test}
+                                     {:name :class_b
+                                      :uri {:prefix "", :value "http://test.com/class_b"}
+                                      :subclass-of #{{:name :owl-thing
+                                                     :uri {:prefix "", :value "http://www.w3.org/2002/07/owl#Thing"}
+                                                     :subclass-of #{}
+                                                     :datatype-properties #{}
+                                                     :object-properties #{}
+                                                     :repository-name :test}}
+                                      :datatype-properties #{{:name :prop_b
+                                                              :uri
+                                                              {:prefix "", :value "http://test.com/prop_b"}
+                                                              :range {:prefix "", :value "http://www.w3.org/2001/XMLSchema#float"}
+                                                              :equivalent-properties #{}
+                                                              :repository-name :test}}
+                                      :object-properties #{}
+                                      :repository-name :test}
+                                     {:name :class_c
+                                      :uri {:prefix "", :value "http://test.com/class_c"}
+                                      :subclass-of #{{:name :owl-thing
+                                                     :uri {:prefix "", :value "http://www.w3.org/2002/07/owl#Thing"}
+                                                     :subclass-of #{}
+                                                     :datatype-properties #{}
+                                                     :object-properties #{}
+                                                     :repository-name :test}}
+                                      :datatype-properties #{}
+                                      :object-properties #{}
+                                      :repository-name :test}}
+                      :datatype-properties #{{:name :prop_b
                                               :uri {:prefix "", :value "http://test.com/prop_b"}
                                               :range {:prefix "", :value "http://www.w3.org/2001/XMLSchema#float"}
                                               :equivalent-properties #{}
                                               :repository-name :test}
-                                             {:name nil
+                                             {:name :prop_a
                                               :uri
                                               {:prefix "", :value "http://test.com/prop_a"}
                                               :range {:prefix "", :value "http://www.w3.org/2001/XMLSchema#float"}
@@ -812,6 +868,78 @@
                                               :repository-name :test}}
                       :object-properties #{}
                       :repository-name :test}
-              (tbox-restore! orig-tbox)
-              (repositories-register-restore! orig-repos)
-              (connections-restore! orig-conn))))))
+                     (close-connection! (connection! :test)))))))))
+
+(deftest test-find-class-by-uri-2
+  (let [repo (init-memory-repository!)
+        graph (describe-tbox
+               (describe-owl-datatype-property "http://test.com/prop_a" (xsd-float))
+               (describe-owl-object-property "http://test.com/prop_b")
+               (describe-owl-class "http://test.com/class_a")
+               (describe-owl-class "http://test.com/class_b")
+               (describe-owl-class "http://test.com/class_c")
+               (describe-owl-subclass "http://test.com/class_a" "http://test.com/class_b")
+               (describe-owl-subclass "http://test.com/class_a" "http://test.com/class_c")
+               ;;               (describe-owl-object-property-and-range "http://test.com/prop_b" "http://test.com/class_c")
+               (describe-owl-class-has-property "http://test.com/class_a" "http://test.com/prop_a")
+               (describe-owl-class-has-property "http://test.com/class_a" "http://test.com/prop_b"))
+        test-template (build-graph-template
+                       [{:template (build-graph
+                                    [(build-variable-node :subject
+                                                          [(build-variable-relation :predicate
+                                                                         (build-variable-node :object))])])
+                         :filters []}])]
+    (do (tbox-clear!)
+        (repositories-registry-clear!)
+        (connections-clear!)
+        (register-repository! :test repo)
+        (write-graph-in-repository graph (connection! :test))
+        (tbox-register-name! :owl-thing (owl-Thing) :test)
+        (tbox-register-name! :class_a "http://test.com/class_a" :test)
+        (tbox-register-name! :class_b "http://test.com/class_b" :test)
+        (tbox-register-name! :class_c "http://test.com/class_c" :test)
+        (tbox-register-name! :prop_a "http://test.com/prop_a" :test)
+        (tbox-register-name! :prop_b "http://test.com/prop_b" :test)
+        (let [class-recovered (tbox-find-class-by-uri! "http://test.com/class_a")]
+          (do (is (= class-recovered
+                     {:name :class_a
+                      :uri "http://test.com/class_a"
+                      :subclass-of #{{:name :class_b
+                                      :uri {:prefix "", :value "http://test.com/class_b"}
+                                      :subclass-of #{{:name :owl-thing
+                                                      :uri {:prefix "", :value "http://www.w3.org/2002/07/owl#Thing"}
+                                                      :subclass-of #{}
+                                                      :datatype-properties #{}
+                                                      :object-properties #{}
+                                                      :repository-name :test}}
+                                      :datatype-properties #{}
+                                      :object-properties #{}
+                                      :repository-name :test}
+                                     {:name :owl-thing
+                                      :uri {:prefix "", :value "http://www.w3.org/2002/07/owl#Thing"}
+                                      :subclass-of #{}
+                                      :datatype-properties #{}
+                                      :object-properties #{}
+                                      :repository-name :test}
+                                     {:name :class_c
+                                      :uri {:prefix "", :value "http://test.com/class_c"}
+                                      :subclass-of #{{:name :owl-thing
+                                                      :uri {:prefix "", :value "http://www.w3.org/2002/07/owl#Thing"}
+                                                      :subclass-of #{}
+                                                      :datatype-properties #{}
+                                                      :object-properties #{}
+                                                      :repository-name :test}}
+                                      :datatype-properties #{}
+                                      :object-properties #{}
+                                      :repository-name :test}}
+                      :datatype-properties #{{:name :prop_a
+                                              :uri {:prefix "", :value "http://test.com/prop_a"}
+                                              :range {:prefix "", :value "http://www.w3.org/2001/XMLSchema#float"}
+                                              :equivalent-properties #{}
+                                              :repository-name :test}}
+                      :object-properties #{{:name :prop_b
+                                            :uri {:prefix "", :value "http://test.com/prop_b"}
+                                            :equivalent-properties #{}
+                                            :repository-name :test}}
+                      :repository-name :test}
+                     (close-connection! (connection! :test)))))))))

@@ -38,6 +38,13 @@
 
 (def *repositories-registry* (ref {}))
 
+(defn repositories-registry-clear!
+  "Empties the repositories registry"
+  ([]
+     (dosync
+      (commute *repositories-registry*
+               (fn [registry] {})))))
+
 (defn register-repository!
  "Registers a repository with the given name, if no name is given
   the repository is registered as the default repository."
@@ -68,6 +75,13 @@
      (default-repository)))
 
 (def *connections* (ref {}))
+
+(defn connections-clear!
+  "Empties the repositories registry"
+  ([]
+     (dosync
+      (commute *connections*
+               (fn [connections] {})))))
 
 (defn connection!
   "Returns a connection for the requested repository, creating it if
@@ -637,7 +651,8 @@
                              args)
                             "\n WHERE ")
            sparql-graph (to-sparql (build-graph-template templates) bindings)]
-       (str sparql-args sparql-graph))))
+;;       (trace (str "QUERY \n" (str sparql-args sparql-graph) "\n")
+              (str sparql-args sparql-graph))))
 
 ;;; JUST FOR TESTING ;;;
 (defn build-query-from-template
@@ -695,8 +710,7 @@
        (if (empty? initial-set)
          initial-set
          (loop [closure (set [])
-                working (trace (str "INITIAL SET VALE " initial-set " para " (uri-to-string subject))
-                               initial-set)]
+                working initial-set]
            (let [this-object (first working)
                  rest-working (rest working)
                  this-working (reduce
