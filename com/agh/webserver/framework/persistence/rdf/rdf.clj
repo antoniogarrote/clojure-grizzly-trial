@@ -458,7 +458,9 @@
 (defn build-variable-node
  "Builds a new variable node"
  ([identifier preds]
-    (build-node (build-variable identifier) :variable-node preds)))
+    (build-node (build-variable identifier) :variable-node preds))
+ ([identifier]
+    (build-node (build-variable identifier) :variable-node [])))
 
 (defn build-optional-graph
   "Builds an optional graph in a pattern"
@@ -552,7 +554,7 @@
 
 (defmethod to-sparql :variable-node [obj bindings]
   "translates a uri-node into a SPARQL query"
-  (let [uri-string  (resolve-bindings (:value obj) bindings)]
+  (let [uri-string (resolve-bindings (:value obj) bindings)]
     (list uri-string
           (if (nil? (:relations obj))
             uri-string
@@ -623,7 +625,7 @@
       (map (fn [x] (if (= #=clojure.lang.Keyword
                           (class x))
                      x
-                     (first (keys x))))
+                     nil))
            bindings-list))))
 
 
@@ -656,7 +658,9 @@
            bindings-list (drop-last 2 args)
            bindings (prepare-bindings bindings-list)
            args (collect-vars bindings-list)
-           sparql-query (prepare-query-from-template args templates bindings)
+           sparql-query (prepare-query-from-template args
+                                                     templates
+                                                     bindings)
            sesame-query (. connection (prepareTupleQuery (. QueryLanguage SPARQL) sparql-query))]
        (let [result (. sesame-query (evaluate))]
          (loop [results []]
@@ -669,6 +673,47 @@
                                args)]
                (recur (conj results new-result)))
              results))))))
+
+(defn query-transitive-closure-for-predicate
+  "Computes the transitive closuer of a property of a subject"
+  ([subject predicate connection]
+     (let [template (build-graph-template
+                     [{:template (build-graph
+                                  [(build-variable-node :subject
+                                                        [(build-relation predicate
+                                                                         (build-variable-node :object))])])
+                       :filters []}])
+           initial-set (reduce
+                        clojure.set/union
+                        (set [])
+                        (map
+                         (fn [result] (set (list (:object result))))
+                         (query-template-in-repository
+                          {:subject subject} :object
+                          template
+                          connection)))]
+       (if (empty? initial-set)
+         initial-set
+         (loop [closure (set [])
+                working (trace (str "INITIAL SET VALE " initial-set " para " (uri-to-string subject))
+                               initial-set)]
+           (let [this-object (first working)
+                 rest-working (rest working)
+                 this-working (reduce
+                               clojure.set/union
+                               (set [])
+                               (map
+                                (fn [result] (set (list (:object result))))
+                                (query-template-in-repository
+                                 {:subject this-object} :object
+                                 template
+                                 connection)))
+                 to-append (clojure.set/difference this-working closure)
+                 new-working (clojure.set/union to-append rest-working)]
+             (if (empty? new-working)
+               (conj closure this-object)
+               (recur (conj closure this-object) new-working))))))))
+
 
 
 ;; Persisting triplets into the repository
@@ -1249,6 +1294,10 @@
   (is (= (prepare-bindings '(:x :y :z))
          {})))
 
+(deftest test-collect-vars-1
+  (is (= (set (collect-vars '(:x {:y 1} :z)))
+         (set [:x :z]))))
+
 (use 'com.agh.utils)
 (deftest query-repository-1
   (is (= (let [repo (init-memory-repository!)
@@ -1454,6 +1503,34 @@
                 :x {:prefix "", :value "http://test.com/test-subjecta/whatever"}
                 :y {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1"}}]))))
 
+(deftest query-in-repository-5
+  (is (= (let [repo (init-memory-repository!)
+               conn (. repo (getConnection))
+               graph (build-graph
+                      [(build-uri-node :rdf "test-subjectb"
+                                       [(build-relation :rdf "relation-2"
+                                                        (build-blank-node "testb" []))])
+                       (build-uri-node :rdf "test-subjectb"
+                                       [(build-relation :rdf "relation-2"
+                                                        (build-blank-node "testb" []))])])]
+           (do
+             (write-graph-in-repository graph conn)
+             (let [result (query-template-in-repository
+                           :x :y :z
+                           [{:template (build-graph
+                                        [(build-variable-node :x
+                                                              [ (build-variable-relation
+                                                                 :y (build-variable-node
+                                                                     :z []))])])
+                             :filters []}]
+                           conn)]
+               (do
+                 (. conn (close))
+                 result))))
+         [{:z {:value "testb"}
+           :x {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#test-subjectb"}
+           :y {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-2"}}])))
+
 
 (deftest test-template-to-graph
   (is (= (let [repo (init-memory-repository!)
@@ -1491,3 +1568,47 @@
                {:z {:value "testb"}
                 :x {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#test-subjectb"}
                 :y {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-2"}}]))))
+
+(deftest test-query-transitive-closure-1
+  (is (= (let [repo (init-memory-repository!)
+               conn (. repo getConnection)
+               graph (build-graph
+                      [(build-uri-node "http://test.com/a"
+                                       [(build-relation :rdf "relation-1"
+                                                        (build-uri-node "http://test.com/b"))])
+                       (build-uri-node "http://test.com/b"
+                                       [(build-relation :rdf "relation-1"
+                                                        (build-uri-node "http://test.com/c"))
+                                        (build-relation :rdf "relation-1"
+                                                        (build-uri-node "http://test.com/c"))
+                                        (build-relation :rdf "relation-1"
+                                                        (build-uri-node "http://test.com/d"))])]) ]
+           (do
+             (write-graph-in-repository graph conn)
+             (let [result (query-transitive-closure-for-predicate "http://test.com/a" (build-uri :rdf "relation-1") conn)]
+               (do
+                 (. conn close)
+                 (set result)))))
+         (set [{:prefix "", :value "http://test.com/b"}
+               {:prefix "", :value "http://test.com/d"}
+               {:prefix "", :value "http://test.com/c"}]))))
+
+(deftest test-query-transitive-closure-2
+  (is (= (let [repo (init-memory-repository!)
+               conn (. repo getConnection)
+               graph (build-graph
+                      [(build-uri-node "http://test.com/a"
+                                       [(build-relation :rdf "relation-1"
+                                                        (build-uri-node "http://test.com/b"))])
+                       (build-uri-node "http://test.com/b"
+                                       [(build-relation :rdf "relation-1"
+                                                        (build-uri-node "http://test.com/c"))
+                                        (build-relation :rdf "relation-1"
+                                                        (build-uri-node "http://test.com/d"))])]) ]
+           (do
+             (write-graph-in-repository graph conn)
+             (let [result (query-transitive-closure-for-predicate "http://test.com/d" (build-uri :rdf "relation-1") conn)]
+               (do
+                 (. conn close)
+                 (set result)))))
+         (set []))))
