@@ -8,6 +8,8 @@
 
 (ns com.agh.webserver.framework.persistence.rdf.vocabularies.owl)
 
+(use 'com.agh.monads)
+(use 'com.agh.monads.maybe)
 (use 'com.agh.webserver.framework.persistence.rdf)
 (use 'com.agh.webserver.framework.persistence.rdf.vocabularies.xsd)
 (use 'com.agh.webserver.framework.persistence.rdf.vocabularies.rdfs)
@@ -302,9 +304,53 @@
 ;;
 ;; TBox manipulation
 ;;
+(def *tbox* (ref {:names {} :uris {} :repositories {} :validations{}}))
 
-(def *tbox* (ref {:names {} :uris {} :repositories {}}))
 
+(defn tbox-register-validation-on!
+  "Add a validation for a modification of the ABox refering some resource of the TBox"
+  ([action resource function]
+     (dosync (commute *tbox*
+                      (fn [tbox]
+                        (let [identifier (if (keyword? resource)
+                                           (get (:names tbox) resource)
+                                           (uri-to-string resource))
+                              old-validations (get (:validations tbox) identifier)
+                              new-validations (if (nil? old-validations)
+                                                {action (set [function])}
+                                                (let [validations-for-action (get old-validations action)]
+                                                  (if (nil? validations-for-action)
+                                                    (merge old-validations {action (set [function])})
+                                                    (merge old-validations {action (conj validations-for-action function)}))))]
+                          {:names (:names tbox)
+                           :uris (:uris tbox)
+                           :repositories (:repositories tbox)
+                           :validations (assoc (dissoc (:repositories tbox) identifier) identifier new-validations)})))))
+  ([action prefix value function]
+     (dosync (commute *tbox*
+                      (fn [tbox]
+                        (let [identifier (uri-to-string (build-uri prefix value))
+                              old-validations (get (:validations tbox) identifier)
+                              new-validations (if (nil? old-validations)
+                                                {action (set [function])}
+                                                (let [validations-for-action (get old-validations action)]
+                                                  (if (nil? validations-for-action)
+                                                    (merge old-validations {action (set [function])})
+                                                    (merge old-validations {action (conj validations-for-action function)}))))]
+                          {:names (:names tbox)
+                           :uris (:uris tbox)
+                           :repositories (:repositories tbox)
+                           :validations (assoc (dissoc (:repositories tbox) identifier) identifier new-validations)}))))))
+
+(defn tbox-retrieve-validations-for
+  "Returns the set of validations for a given TBox resource"
+  ([action resource]
+     (dosync (action (get (:validations @*tbox*) (if (keyword? resource)
+                                                  (get (:names @*tbox*) resource)
+                                                  (uri-to-string resource))))))
+  ([action prefix value]
+     (dosync
+      (action (get (:validations @*tbox*) (uri-to-string (build-uri prefix value)))))))
 
 (defn tbox-find-datatype-property-by-uri!
   "Builds a datatype property and stores it in the TBox"
@@ -326,7 +372,8 @@
                                           repository-name)]
                      {:names (:names tbox)
                       :uris (merge (:uris tbox) {datatype-property-uri property})
-                      :repositories (:repositories tbox)})
+                      :repositories (:repositories tbox)
+                      :validations (:validations tbox)})
                    tbox))
                datatype-property-uri)
       (get (:uris @*tbox*) datatype-property-uri))))
@@ -349,7 +396,8 @@
                                           repository-name)]
                      {:names (:names tbox)
                       :uris (merge (:uris tbox) {property-uri property})
-                      :repositories (:repositories tbox)})
+                      :repositories (:repositories tbox)
+                      :validations (:validations tbox)})
                    tbox))
                object-property-uri)
       (get (:uris @*tbox*) object-property-uri))))
@@ -403,7 +451,8 @@
                    (fn [tbox]
                      {:names (:names tbox)
                       :uris (merge (:uris tbox) {class-uri class})
-                      :repositories (:repositories tbox)}))))
+                      :repositories (:repositories tbox)
+                      :validations (:validations tbox)}))))
       (get (:uris @*tbox*) class-uri))))
 
 (defn tbox-find-datatype-property!
@@ -431,11 +480,13 @@
                  (if (= (class uri) #=java.lang.String)
                    {:names (merge (:names tbox) {name uri})
                     :uris (:uris tbox)
-                    :repositories (merge (:repositories tbox) {uri :default}) }
+                    :repositories (merge (:repositories tbox) {uri :default})
+                    :validations (:validations tbox)}
                    (let [uri-name (uri-to-string uri)]
                      {:names (merge (:names tbox) {name uri-name})
                       :uris (:uris tbox)
-                      :repositories (merge (:repositories tbox) {uri-name :default}) })))
+                      :repositories (merge (:repositories tbox) {uri-name :default})
+                      :validations (:validations tbox)})))
                name
                uri)))
   ([name uri repository]
@@ -445,11 +496,13 @@
                  (if (= (class uri) #=java.lang.String)
                    {:names (merge (:names tbox) {name uri})
                     :uris (:uris tbox)
-                    :repositories (merge (:repositories tbox) {uri repository}) }
+                    :repositories (merge (:repositories tbox) {uri repository})
+                    :validations (:validations tbox)}
                    (let [uri-name (uri-to-string uri)]
                      {:names (merge (:names tbox) {name uri-name})
                       :uris (:uris tbox)
-                      :repositories (merge (:repositories tbox) {uri-name repository}) })))
+                      :repositories (merge (:repositories tbox) {uri-name repository})
+                      :validations (:validations tbox) })))
                name
                uri))))
 
@@ -459,7 +512,40 @@
      (dosync
       (commute *tbox*
                (fn [tbox]
-                 {:names {} :uris {} :repositories {}})))))
+                 {:names {} :uris {} :repositories {} :validations {}})))))
+
+
+;; ABox creation and manipulation
+
+(defn gen-id
+  "Generates an unique identifier"
+  ([] (.. java.util.UUID (randomUUID) (toString))))
+
+(defn apply-validations
+  "Applies validations for an action and resource to certain arguments"
+  ([action resource-uri args-list]
+     (let [resource-validations (tbox-retrieve-validations-for action (uri-to-string resource-uri))]
+       (if (nothing? (loop [validations resource-validations
+                            monad (just args-list)]
+                       (if (nil? validations)
+                         monad
+                         (recur (rest validations)
+                                (>>= (fn [props] (if (true? (apply (first validations) props))
+                                                   (just props)
+                                                   (nothing)))
+                                     monad)))))
+         false
+         true))))
+
+
+;;(defn create-individual
+;;  "Creates a new individual of a given class"
+;;  ([class-name-or-uri props-map]
+;;     (let [owl-class (if (keyword? class-name-or-uri)
+;;                     (tbox-find-class! class-name-or-uri)
+;;                     (tbox-find-class-by-uri! class-name-or-uri))
+;;           identifier (if (keyword? class-name-or-uri)
+;;                      (class-name-or-uri ]
 
 
 
@@ -734,7 +820,8 @@
           (is (= new-tbox
                  {:repositories {"http://test.com" :default}
                   :names {:test "http://test.com"}
-                  :uris {}}))))))
+                  :uris {}
+                  :validations {}}))))))
 
 (deftest test-tbox-register-name-2
   (do (tbox-clear!)
@@ -744,7 +831,59 @@
       (let [new-tbox @*tbox*]
         (do
           (is (= new-tbox
-                 {:names {:test (uri-to-string (build-uri :rdf "a"))} :uris {} :repositories {(uri-to-string (build-uri :rdf "a")) :default}}))))))
+                 {:names {:test (uri-to-string (build-uri :rdf "a"))} :uris {} :repositories {(uri-to-string (build-uri :rdf "a")) :default} :validations {}}))))))
+
+(deftest test-tbox-register-validation-on
+  (do (tbox-clear!)
+      (repositories-registry-clear!)
+      (connections-clear!)
+      (tbox-register-name! :test (build-uri :rdf "a"))
+      (tbox-register-validation-on! :create (build-uri :rdf "a") +)
+      (tbox-register-validation-on! :create (build-uri :rdf "a") (fn [x y] (+ x y)))
+      (let [new-tbox @*tbox*]
+        (do
+          (is (= 2
+                 (count (:create (get (:validations new-tbox) (uri-to-string (build-uri :rdf "a")))))))))))
+
+(deftest test-tbox-register-validation-on-2
+  (do (tbox-clear!)
+      (repositories-registry-clear!)
+      (connections-clear!)
+      (tbox-register-name! :test (build-uri :rdf "a"))
+      (tbox-register-validation-on! :create :rdf "a" +)
+      (tbox-register-validation-on! :create :rdf "a" (fn [x y] (+ x y)))
+      (let [new-tbox @*tbox*]
+        (do
+          (is (= 2
+                 (count (:create (get (:validations new-tbox) (uri-to-string (build-uri :rdf "a")))))))))))
+
+(deftest test-tbox-retrieve-validations-for-1
+  (do (tbox-clear!)
+      (repositories-registry-clear!)
+      (connections-clear!)
+      (tbox-register-name! :test (build-uri :rdf "a"))
+      (tbox-register-validation-on! :create :rdf "a" +)
+      (tbox-register-validation-on! :create :rdf "a" (fn [x y] (+ x y)))
+      (let [new-tbox @*tbox*]
+        (do
+          (is (= true
+                 (set? (tbox-retrieve-validations-for :create :rdf "a"))))
+          (is (= 2
+                 (count (tbox-retrieve-validations-for :create :rdf "a"))))))))
+
+(deftest test-tbox-retrieve-validations-for-2
+  (do (tbox-clear!)
+      (repositories-registry-clear!)
+      (connections-clear!)
+      (tbox-register-name! :test (build-uri :rdf "a"))
+      (tbox-register-validation-on! :create (build-uri :rdf "a") +)
+      (tbox-register-validation-on! :create (build-uri :rdf "a") (fn [x y] (+ x y)))
+      (let [new-tbox @*tbox*]
+        (do
+          (is (= true
+                 (set? (tbox-retrieve-validations-for :create :rdf "a"))))
+          (is (= 2
+                 (count (tbox-retrieve-validations-for :create :rdf "a"))))))))
 
 (deftest test-tbox-find-datatype-property-by-uri
   (let [repo (init-memory-repository!)
@@ -943,3 +1082,37 @@
                                             :repository-name :test}}
                       :repository-name :test}
                      (close-connection! (connection! :test)))))))))
+
+;; ABox tests
+
+(deftest test-generate-id-1
+  (is (not (nil? (gen-id)))))
+
+(deftest test-generate-id-2
+  (is (= (class (gen-id))
+         #=java.lang.String)))
+
+
+(deftest test-apply-validations-1
+  (do (tbox-clear!)
+      (repositories-registry-clear!)
+      (connections-clear!)
+      (tbox-register-name! :test (build-uri :rdf "a"))
+      (tbox-register-validation-on! :create :rdf "a" (fn [ & args] (do (is (= (count args) 4)) true)))
+      (tbox-register-validation-on! :create :rdf "a" (fn [ & args] (do (is (= (count args) 4)) true)))
+      (let [new-tbox @*tbox*]
+        (do
+          (is (= true
+                 (apply-validations :create (build-uri :rdf "a") (list 1 2 3 4))))))))
+
+(deftest test-apply-validations-2
+  (do (tbox-clear!)
+      (repositories-registry-clear!)
+      (connections-clear!)
+      (tbox-register-name! :test (build-uri :rdf "a"))
+      (tbox-register-validation-on! :create :rdf "a" (fn [ & args] (do (is (= (count args) 4)) true)))
+      (tbox-register-validation-on! :create :rdf "a" (fn [ & args] (do (is (= (count args) 4)) false)))
+      (let [new-tbox @*tbox*]
+        (do
+          (is (= false
+                 (apply-validations :create (build-uri :rdf "a") (list 1 2 3 4))))))))
