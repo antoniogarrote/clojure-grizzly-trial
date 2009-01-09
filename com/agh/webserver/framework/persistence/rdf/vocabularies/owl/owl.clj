@@ -13,6 +13,7 @@
 (use 'com.agh.webserver.framework.persistence.rdf)
 (use 'com.agh.webserver.framework.persistence.rdf.vocabularies.xsd)
 (use 'com.agh.webserver.framework.persistence.rdf.vocabularies.rdfs)
+(use 'com.agh.webserver.framework.logger)
 (use 'com.agh.utils)
 
 ;; OWL vocabulary
@@ -304,17 +305,36 @@
 ;;
 ;; TBox manipulation
 ;;
+
+;;(defstruct tbox-data
+;;  :names ;; a map from user names to uris for different tbox resources
+;;  :uris ;; a map from uris to resource data
+;;  :repositories ;; a map from uris to repository name for where the resource is stored
+;;  :validations ;; a map of uris to a hash of validations sets for different validations
+;;)
+
 (def *tbox* (ref {:names {} :uris {} :repositories {} :validations{}}))
 
+(defn tbox-retrieve-uri-for
+  "Returns the URI for a resource name, if a string is passed as the argument
+   it is assumed to be a URI and returned without modification"
+  ([identifier]
+     (if (keyword? identifier)
+       (dosync (identifier (:names @*tbox*)))
+       (uri-to-string identifier))))
+
+(defn tbox-retrieve-repository-for
+  "Returns the repository where a resource is stored"
+  ([identifier]
+     (let [uri (tbox-retrieve-uri-for identifier)]
+       (dosync (uri (:repositories @*tbox*))))))
 
 (defn tbox-register-validation-on!
   "Add a validation for a modification of the ABox refering some resource of the TBox"
   ([action resource function]
      (dosync (commute *tbox*
                       (fn [tbox]
-                        (let [identifier (if (keyword? resource)
-                                           (get (:names tbox) resource)
-                                           (uri-to-string resource))
+                        (let [identifier (tbox-retrieve-uri-for resource)
                               old-validations (get (:validations tbox) identifier)
                               new-validations (if (nil? old-validations)
                                                 {action (set [function])}
@@ -364,12 +384,14 @@
                          datatype (retrieve-owl-range-for-property datatype-property-uri connection)
                          equivalent-properties (retrieve-owl-equivalent-properties-for-property datatype-property-uri connection)
                          name (key-for-value (:names tbox) (uri-to-string datatype-property-uri))
-                         property (struct owl-datatype-property
-                                          (if (= name nil) nil (first name))
-                                          datatype-property-uri
-                                          datatype
-                                          equivalent-properties
-                                          repository-name)]
+                         property (with-meta
+                                   (struct owl-datatype-property
+                                           (if (= name nil) nil (first name))
+                                           datatype-property-uri
+                                           datatype
+                                           equivalent-properties
+                                           repository-name)
+                                   {:rdf :owl-datatype-property})]
                      {:names (:names tbox)
                       :uris (merge (:uris tbox) {datatype-property-uri property})
                       :repositories (:repositories tbox)
@@ -389,11 +411,13 @@
                          connection (connection! repository-name)
                          equivalent-properties (retrieve-owl-equivalent-properties-for-property property-uri connection)
                          name (key-for-value (:names tbox) (uri-to-string object-property-uri))
-                         property (struct owl-object-property
-                                          (if (= name nil) nil (first name))
-                                          property-uri
-                                          equivalent-properties
-                                          repository-name)]
+                         property (with-meta
+                                   (struct owl-object-property
+                                           (if (= name nil) nil (first name))
+                                           property-uri
+                                           equivalent-properties
+                                           repository-name)
+                                   {:rdf :owl-object-property})]
                      {:names (:names tbox)
                       :uris (merge (:uris tbox) {property-uri property})
                       :repositories (:repositories tbox)
@@ -440,13 +464,15 @@
                                                  props-found (retrieve-owl-object-properties-for-class  class-to-look connection)]
                                              (recur (clojure.set/union props props-found)
                                                     (rest classes)))))))
-              class (struct owl-class
-                            (if (= name nil) nil (first name))
-                            class-uri
-                            superclasses
-                            base-datatype-properties
-                            base-object-properties
-                            repository-name)]
+              class (with-meta
+                     (struct owl-class
+                             (if (= name nil) nil (first name))
+                             class-uri
+                             superclasses
+                             base-datatype-properties
+                             base-object-properties
+                             repository-name)
+                     {:rdf :owl-class})]
           (commute *tbox*
                    (fn [tbox]
                      {:names (:names tbox)
@@ -514,8 +540,14 @@
                (fn [tbox]
                  {:names {} :uris {} :repositories {} :validations {}})))))
 
-
 ;; ABox creation and manipulation
+
+(defstruct abox-individual
+  :identifier ;; the unique identifier of this individual
+  :uri ;; the URI identifying this individual, composed of a namespace and the UUID
+  :classes ;; the owl classes this individual belongs to
+  :properties-value-map ;; map with class -> {:property-name value} maps
+)
 
 (defn gen-id
   "Generates an unique identifier"
@@ -524,7 +556,7 @@
 (defn apply-validations
   "Applies validations for an action and resource to certain arguments"
   ([action resource-uri args-list]
-     (let [resource-validations (tbox-retrieve-validations-for action (uri-to-string resource-uri))]
+     (let [resource-validations (tbox-retrieve-validations-for action (tbox-retrieve-uri-for resource-uri))]
        (if (nothing? (loop [validations resource-validations
                             monad (just args-list)]
                        (if (nil? validations)
@@ -538,15 +570,51 @@
          true))))
 
 
-;;(defn create-individual
-;;  "Creates a new individual of a given class"
-;;  ([class-name-or-uri props-map]
-;;     (let [owl-class (if (keyword? class-name-or-uri)
-;;                     (tbox-find-class! class-name-or-uri)
-;;                     (tbox-find-class-by-uri! class-name-or-uri))
-;;           identifier (if (keyword? class-name-or-uri)
-;;                      (class-name-or-uri ]
-
+(defn abox-create-individual
+  "Creates a new individual of a given class"
+  ([class-name-or-uri individual-ns props-map]
+     (let [uri (tbox-retrieve-uri-for class-name-or-uri)
+           ns-uri (if (keyword? individual-ns) (:prefix (rdf-ns individual-ns)) individual-ns)
+           owl-class (tbox-find-class-by-uri! uri)
+           rdf-props-map (reduce
+                          (fn [acum item] (merge acum item))
+                          {}
+                          (map
+                           (fn [key] {(tbox-retrieve-uri-for key)
+                                      (to-rdf (get props-map key))})
+                           (keys props-map)))]
+       (if (loop [classes (conj (:subclass-of owl-class) owl-class)] ;; lets check if all the validations for superclasses and the class validates
+             (if (nil? classes)
+               true
+               (if (apply-validations :create (:uri (first classes)) (list rdf-props-map))
+                 (recur (rest classes))
+                 false)))
+         (do
+           (loop [keys (keys props-map)]
+             (if (not (nil? keys))
+               (let [the-key (first keys)
+                     the-key-uri (tbox-retrieve-uri-for the-key)]
+                 (if (apply-validations :create the-key-uri (list (get rdf-props-map the-key-uri)))
+                   (recur (rest keys))
+                   (throw (Exception. (str "Validations failed for resource "
+                                           uri
+                                           "on property validation for property "
+                                           (tbox-retrieve-uri-for the-key)
+                                           "with value "
+                                           (the-key props-map))))))))
+           ;; validations OK
+           (let [uuid (gen-id)]
+             (with-meta
+              (struct abox-individual
+                      uuid
+                      (str ns-uri uuid)
+                      (set [owl-class])
+                      {(:uri owl-class) rdf-props-map})
+              {:rdf :owl-individual})))
+         (throw (Exception. (str "Validations failed for resource "
+                                 uri
+                                 " and arguments "
+                                 props-map)))))))
 
 
 (clojure/comment
@@ -1116,3 +1184,77 @@
         (do
           (is (= false
                  (apply-validations :create (build-uri :rdf "a") (list 1 2 3 4))))))))
+
+(deftest test-abox-create-individual-1
+  (let [repo (init-memory-repository!)
+        graph (describe-tbox
+               (describe-owl-datatype-property "http://test.com/prop_a" (xsd-decimal))
+               (describe-owl-datatype-property "http://test.com/prop_b" (xsd-string))
+               (describe-owl-class "http://test.com/class_a")
+               (describe-owl-class "http://test.com/class_b")
+               (describe-owl-subclass "http://test.com/class_a" "http://test.com/class_b")
+               (describe-owl-class-has-property "http://test.com/class_a" "http://test.com/prop_a")
+               (describe-owl-class-has-property "http://test.com/class_b" "http://test.com/prop_b"))
+        test-template (build-graph-template
+                       [{:template (build-graph
+                                    [(build-variable-node :subject
+                                                          [(build-variable-relation :predicate
+                                                                         (build-variable-node :object))])])
+                         :filters []}])]
+    (do (tbox-clear!)
+        (repositories-registry-clear!)
+        (connections-clear!)
+        (register-repository! :test repo)
+        (write-graph-in-repository graph (connection! :test))
+        (tbox-register-name! :owl-thing (owl-Thing) :test)
+        (tbox-register-name! :class_a "http://test.com/class_a" :test)
+        (tbox-register-name! :class_b "http://test.com/class_b" :test)
+        (tbox-register-name! :prop_a "http://test.com/prop_a" :test)
+        (tbox-register-name! :prop_b "http://test.com/prop_b" :test)
+        (let [individual (abox-create-individual :class_a "http://test.com/individuals#" {:prop_a 1, :prop_b "hola"})]
+          (do
+            (is (= (set (map (fn [c] (uri-to-string (:uri c))) (:classes individual)))
+                   (set ["http://test.com/class_a"])))
+            (is (= (nil? (:identifier individual) )
+                   false))
+            (is (= (:properties-value-map individual)
+                   {"http://test.com/class_a"
+                    {"http://test.com/prop_a" {:value 1, :datatype {:prefix :xsd, :value "decimal"}, :lang ""}
+                     "http://test.com/prop_b" {:value "ol", :datatype {:prefix :xsd, :value "string"}, :lang ""}}})))))))
+
+(deftest test-abox-create-individual-2
+  (let [repo (init-memory-repository!)
+        graph (describe-tbox
+               (describe-owl-datatype-property "http://test.com/prop_a" (xsd-decimal))
+               (describe-owl-datatype-property "http://test.com/prop_b" (xsd-string))
+               (describe-owl-class "http://test.com/class_a")
+               (describe-owl-class "http://test.com/class_b")
+               (describe-owl-subclass "http://test.com/class_a" "http://test.com/class_b")
+               (describe-owl-class-has-property "http://test.com/class_a" "http://test.com/prop_a")
+               (describe-owl-class-has-property "http://test.com/class_b" "http://test.com/prop_b"))
+        test-template (build-graph-template
+                       [{:template (build-graph
+                                    [(build-variable-node :subject
+                                                          [(build-variable-relation :predicate
+                                                                         (build-variable-node :object))])])
+                         :filters []}])]
+    (do (tbox-clear!)
+        (repositories-registry-clear!)
+        (connections-clear!)
+        (register-repository! :test repo)
+        (write-graph-in-repository graph (connection! :test))
+        (tbox-register-name! :owl-thing (owl-Thing) :test)
+        (tbox-register-name! :class_a "http://test.com/class_a" :test)
+        (tbox-register-name! :class_b "http://test.com/class_b" :test)
+        (tbox-register-name! :prop_a "http://test.com/prop_a" :test)
+        (tbox-register-name! :prop_b "http://test.com/prop_b" :test)
+        (tbox-register-validation-on! :create :prop_a (fn [value-prop]
+                                                        (if (> (:value value-prop) 1)
+                                                          false
+                                                          true)))
+        (is (= (try
+                (do
+                  (abox-create-individual :class_a "http://test.com/individuals#" {:prop_a 15, :prop_b "hola"})
+                  true)
+                (catch Exception _ false))
+               false)))))

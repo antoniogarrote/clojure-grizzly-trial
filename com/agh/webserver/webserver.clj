@@ -3,6 +3,9 @@
 
 (ns com.agh.webserver)
 
+(use 'clojure.contrib.test-is)
+(use 'com.agh.webserver.framework.logger)
+
 (defn reload-framework []
   (do
     (use :reload 'com.agh.monads)
@@ -11,6 +14,7 @@
     (use :reload 'com.agh.monads.state)
     (use :reload 'com.agh.monads.webio)
     (use :reload 'com.agh.utils)
+    (use :reload 'com.agh.webserver.framework.logger)
     (use :reload 'com.agh.webserver.framework.router)
     (use :reload 'com.agh.webserver.framework.persistence.rdf)
     (use :reload 'com.agh.webserver.framework.persistence.rdf.vocabularies.xsd)
@@ -24,3 +28,9 @@
   (with-rack-response req function))
 
 
+(defn run-and-log-to
+  ([path]
+     (do
+       (reload-framework)
+       (reset-logger-with-file-output :debug path)
+       (run-all-tests))))

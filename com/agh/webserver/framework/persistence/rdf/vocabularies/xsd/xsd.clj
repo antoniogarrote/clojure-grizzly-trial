@@ -45,6 +45,16 @@
   ([value]
      (build-literal value (xsd-float))))
 
+;; to-rdf conversions
+(defmethod to-rdf #=java.lang.Double [something]
+  (literal-double something))
+
+(defmethod to-rdf #=java.lang.Float [something]
+  (literal-float something))
+
+(defmethod to-rdf #=java.lang.Number [something]
+  (literal-decimal something))
+
 
 (clojure/comment
   "Tests"
@@ -91,3 +101,12 @@
 (deftest test-literal-double
   (is (= (literal-double 2)
          {:value 2  :lang "" :datatype {:prefix :xsd, :value "double"}})))
+
+(deftest test-to-rdf-double
+  (is (= (to-rdf 2.0)
+         {:value 2.0 :lang "" :datatype {:prefix :xsd, :value "double"}})))
+
+
+(deftest test-to-rdf-decimal
+  (is (= (to-rdf 2)
+         {:value 2 :lang "" :datatype {:prefix :xsd, :value "decimal"}})))

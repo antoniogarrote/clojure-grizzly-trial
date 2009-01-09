@@ -20,6 +20,9 @@
         '(org.openrdf.query QueryLanguage)
         '(org.slf4j LoggerFactory))
 
+(use 'com.agh.utils)
+(use 'com.agh.webserver.framework.logger)
+
 ;; (init-repository "com.mysql.jdbc.Driver" "jdbc:mysql://localhost:3306/clojure_sesame" "root" "root")
 (defn init-repository!
   "Instantiates a new repository connection and stores it in
@@ -207,7 +210,7 @@
 (defn literal-to-string
   "Gets a String representation of the literal compatible with SPARQL"
   ([literal]
-     (let [base (str (:value literal))
+     (let [base (str "\""(:value literal) "\"")
            datatype (if (= "" (:datatype literal))
                       ""
                       (uri-to-string (:datatype literal)))
@@ -550,10 +553,6 @@
          sparql-fragment (second object-triplets-translation) ]
     (str "<" (uri-to-string (:value obj)) "> " object-sparql " .\n" sparql-fragment) ))
 
-(defn keyword-to-string
-  "Transforms a keyword into a string minus ':'"
-  ([kw] (. (str kw) (substring 1 (. (str kw) length)))))
-
 (defn resolve-bindings
   "Returns the SPARQL representation of a variable or the binded value
    if a binding for that identifier exists in the bindings hash"
@@ -673,9 +672,10 @@
            bindings-list (drop-last 2 args)
            bindings (prepare-bindings bindings-list)
            args (collect-vars bindings-list)
-           sparql-query (prepare-query-from-template args
-                                                     templates
-                                                     bindings)
+           sparql-query (log :info "Quering repository with SPARQL query"
+                             (prepare-query-from-template args
+                                                          templates
+                                                          bindings))
            sesame-query (. connection (prepareTupleQuery (. QueryLanguage SPARQL) sparql-query))]
        (let [result (. sesame-query (evaluate))]
          (loop [results []]
@@ -819,6 +819,32 @@
                   (map (fn [graph-from-template]
                            (:nodes (template-to-graph graph-from-template bindings))) nodes-sets)))))
 
+;; Several multimethods that parses data into the propper RDF objects
+;; meaning something valid with :rdf meatadata
+(defmulti to-rdf class)
+
+(defmethod to-rdf :default [something]
+  (throw (Exception. (str "Error to-rdf, unkown class for resource : " something))))
+
+(defmethod to-rdf #=clojure.lang.PersistentArrayMap [something]
+  something)
+
+(defmethod to-rdf #=java.lang.String [something]
+  (if (nil? (re-find '#"^http://" something))
+    (let [parts (. something (split "\"\\^\\^"))]
+      (if (= (count parts) 2) ;; has a datatype?
+        (let [value (. (first parts) (substring 1))
+              datatype (second parts)]
+          (build-literal value (build-uri datatype)))
+        (let [parts (. something (split "\"@"))]
+          (if (= (count parts) 2) ;; has a language tag?
+            (let [value (. (first parts) (substring 1))
+                  lang (second parts)]
+              (build-literal value lang))
+            (build-literal (. something (substring 1 (- (. something length) 1))))))))
+    (build-uri something)))
+
+
 (clojure/comment
   "Tests"
 )
@@ -927,15 +953,15 @@
 
 (deftest test-literal-to-string-1
   (is (= (literal-to-string (build-literal "a"))
-         "a^^http://www.w3.org/2001/XMLSchema#string")))
+         "\"a\"^^http://www.w3.org/2001/XMLSchema#string")))
 
 (deftest test-literal-to-string-2
   (is (= (literal-to-string (build-literal "a" "es_es"))
-         "a@es_es")))
+         "\"a\"@es_es")))
 
 (deftest test-literal-to-string-3
   (is (= (literal-to-string (build-literal "a" (build-uri "http://test.com#datatype")))
-         "a^^http://test.com#datatype")))
+         "\"a\"^^http://test.com#datatype")))
 
 (deftest test-relation-1
   (is (= (build-relation (rdf-ns :rdf) "test" (build-literal "testPredicate"))
@@ -1198,9 +1224,6 @@
                (. conn (size (make-array org.openrdf.sail.memory.model.MemURI 0)))))
         (. conn (close)))))
 
-(deftest test-keword-to-string
-  (is (= (keyword-to-string :x)
-         "x")))
 
 (deftest test-to-sparql-1
   (is (= (to-sparql (build-graph
@@ -1243,7 +1266,7 @@
                                         [(build-variable-relation :y
                                                          (build-uri-node :rdf "testb" []))])])
                     {})
-         "OPTIONAL { ?x <http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1> test@es_ES .\n<http://www.w3.org/1999/02/22-rdf-syntax-ns#test-subjectb> ?y <http://www.w3.org/1999/02/22-rdf-syntax-ns#testb> .\n")))
+         "OPTIONAL { ?x <http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1> \"test\"@es_ES .\n<http://www.w3.org/1999/02/22-rdf-syntax-ns#test-subjectb> ?y <http://www.w3.org/1999/02/22-rdf-syntax-ns#testb> .\n")))
 
 (deftest test-to-sparql-6
   (is (= (to-sparql (build-optional-graph
@@ -1254,7 +1277,7 @@
                                         [(build-variable-relation :y
                                                          (build-uri-node :rdf "testb" []))])])
                     {})
-         "OPTIONAL { ?x <http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1> test@es_ES .\n_:a ?y <http://www.w3.org/1999/02/22-rdf-syntax-ns#testb> .\n")))
+         "OPTIONAL { ?x <http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1> \"test\"@es_ES .\n_:a ?y <http://www.w3.org/1999/02/22-rdf-syntax-ns#testb> .\n")))
 
 (deftest test-to-sparql-7
   (is (= (to-sparql (build-graph-template
@@ -1268,7 +1291,7 @@
                        :filters [(build-filter :x "?x < 25")
                                  (build-filter :y "isURI(?y)")]}])
                      {})
-         "OPTIONAL { ?x <http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1> test@es_ES .\n_:a ?y <http://www.w3.org/1999/02/22-rdf-syntax-ns#testb> .\nFILTER (?x < 25) .\nFILTER (isURI(?y)) .\n }\n")))
+         "OPTIONAL { ?x <http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1> \"test\"@es_ES .\n_:a ?y <http://www.w3.org/1999/02/22-rdf-syntax-ns#testb> .\nFILTER (?x < 25) .\nFILTER (isURI(?y)) .\n }\n")))
 
 (deftest test-to-sparql-8
   (is (= (to-sparql (build-graph-template
@@ -1282,7 +1305,7 @@
                        :filters [(build-filter :x "?x < 25")
                                  (build-filter :y "isURI(?y)")]}])
                      {:x (build-uri :rdf "a")})
-         "OPTIONAL { <http://www.w3.org/1999/02/22-rdf-syntax-ns#a> <http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1> test@es_ES .\n_:a ?y <http://www.w3.org/1999/02/22-rdf-syntax-ns#testb> .\nFILTER (isURI(?y)) .\n }\n")))
+         "OPTIONAL { <http://www.w3.org/1999/02/22-rdf-syntax-ns#a> <http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1> \"test\"@es_ES .\n_:a ?y <http://www.w3.org/1999/02/22-rdf-syntax-ns#testb> .\nFILTER (isURI(?y)) .\n }\n")))
 
 (deftest test-to-sparql-9
   (is (= (to-sparql
@@ -1626,3 +1649,23 @@
                  (. conn close)
                  (set result)))))
          (set []))))
+
+(deftest test-to-rdf-1
+  (is (= (to-rdf {:a 1})
+         {:a 1})))
+
+(deftest test-to-rdf-2
+  (is (= (to-rdf "http://test.com")
+         {:prefix "", :value "http://test.com"})))
+
+(deftest test-to-rdf-3
+  (is (= (to-rdf "\"hooola\"")
+         {:value "hooola", :datatype {:prefix :xsd, :value "string"}, :lang ""})))
+
+(deftest test-to-rdf-4
+  (is (= (to-rdf "\"hooola\"^^test")
+         {:value "hooola", :datatype {:prefix "", :value "test"}, :lang ""})))
+
+(deftest test-to-rdf-5
+  (is (= (to-rdf "\"hooola\"@es_ES")
+         {:value "hooola", :datatype {:prefix :xsd, :value "string"}, :lang "es_ES"})))

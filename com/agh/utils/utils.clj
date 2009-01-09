@@ -14,6 +14,11 @@
   (do (println msg)
       form))
 
+;; keywords
+(defn keyword-to-string
+  "Transforms a keyword into a string minus ':'"
+  ([kw] (. (str kw) (substring 1 (. (str kw) length)))))
+
 ;; collections
 
 (defn key-for-value [the-map the-value]
@@ -115,3 +120,7 @@
 (deftest test-compose-filters
   (is (= (c.a_ (map (c_ + 2)) (filter (c_ = 1)) [1 2 3 4 1])
          [3 3])))
+
+(deftest test-keword-to-string
+  (is (= (keyword-to-string :x)
+         "x")))
