@@ -236,11 +236,22 @@
 (defn build-relation
   "Builds a new relation for a given URI"
   ([prefix uri related-object]
-     (with-meta (struct rdf-relation (build-uri prefix uri) related-object) {:rdf :relation}))
+     (let [meta-related (rdf-meta related-object)]
+       (if (= meta-related :uri)
+         (with-meta (struct rdf-relation (build-uri prefix uri) (build-uri-node related-object)) {:rdf :relation})
+         (if (= meta-related :literal)
+           (with-meta (struct rdf-relation (build-uri prefix uri) (build-literal-node related-object)) {:rdf :relation})
+           (with-meta (struct rdf-relation (build-uri prefix uri) related-object) {:rdf :relation})))))
   ([predicate related-object]
-     (if (= (rdf-meta predicate) :uri)
-       (with-meta (struct rdf-relation predicate related-object) {:rdf :relation})
-       (with-meta (struct rdf-relation (build-uri predicate) related-object) {:rdf :relation}))))
+     (let [meta-related (rdf-meta related-object)
+           to-relate (if (= meta-related :uri)
+                       (build-uri-node related-object)
+                       (if (= meta-related :literal)
+                         (build-literal-node related-object)
+                         related-object)) ]
+       (if (= (rdf-meta predicate) :uri)
+         (with-meta (struct rdf-relation predicate to-relate) {:rdf :relation})
+         (with-meta (struct rdf-relation (build-uri predicate) to-relate) {:rdf :relation})))))
 
 ;; nodes
 (defn build-node
@@ -343,9 +354,9 @@
   "Translates the RDF literal object into a Sesame equivalent"
   (if (= (:lang obj) "")
     (if (not (nil? (:datatype obj)))
-      (. factory (createLiteral (:value obj) (sesame-translate (:datatype obj) factory)))
+      (. factory (createLiteral (str (:value obj)) (sesame-translate (:datatype obj) factory)))
       (. factory (createLiteral (:value obj))))
-    (. factory (createLiteral (:value obj) (:lang obj)))))
+    (. factory (createLiteral (str (:value obj)) (:lang obj)))))
 
 (defmethod sesame-translate :relation [obj factory]
   "Translates the RDF relation into a Sesame equivalent"
@@ -404,7 +415,7 @@
 
 (defmethod to-triplets :uri-node [obj]
   "Translates a RDF URI node to a triplets-set"
-  (let [ col-of-sets (map (fn [predicate-triplets-translation]
+  (let [col-of-sets (map (fn [predicate-triplets-translation]
                             (let [predicate-triplets-set (second predicate-triplets-translation)
                                   predicate-partial-triplet (first predicate-triplets-translation)
                                   predicate-partial (first predicate-partial-triplet)
@@ -445,7 +456,9 @@
                                     (fn [node] (second (to-triplets node)))
                                     (:nodes obj))))
 
-
+(defmethod to-triplets :default [obj]
+  "Translates a RDF graph to a set of triplets-set default action"
+  (throw (Exception. (str "Error, unknown rdf-meta in to-triplets for object " obj " with meta " (rdf-meta obj)))))
 
 ;; SPARQL queries
 
@@ -650,7 +663,6 @@
                              args)
                             "\n WHERE ")
            sparql-graph (to-sparql (build-graph-template templates) bindings)]
-;;       (trace (str "QUERY \n" (str sparql-args sparql-graph) "\n")
               (str sparql-args sparql-graph))))
 
 ;;; JUST FOR TESTING ;;;
@@ -824,9 +836,12 @@
 (defmulti to-rdf class)
 
 (defmethod to-rdf :default [something]
-  (throw (Exception. (str "Error to-rdf, unkown class for resource : " something))))
+  (throw (Exception. (str "Error to-rdf, unkown dispatch for resource: " something " with class " (class something) ))))
 
 (defmethod to-rdf #=clojure.lang.PersistentArrayMap [something]
+  something)
+
+(defmethod to-rdf #=clojure.lang.PersistentStructMap [something]
   something)
 
 (defmethod to-rdf #=java.lang.String [something]
@@ -841,7 +856,7 @@
             (let [value (. (first parts) (substring 1))
                   lang (second parts)]
               (build-literal value lang))
-            (build-literal (. something (substring 1 (- (. something length) 1))))))))
+            (build-literal something)))))
     (build-uri something)))
 
 
@@ -965,7 +980,7 @@
 
 (deftest test-relation-1
   (is (= (build-relation (rdf-ns :rdf) "test" (build-literal "testPredicate"))
-         {:value {:prefix :rdf, :value "test"}, :object {:value "testPredicate", :datatype {:prefix :xsd, :value "string"}, :lang ""}})))
+         {:value {:prefix :rdf, :value "test"}, :object {:value {:value "testPredicate", :datatype {:prefix :xsd, :value "string"}, :lang ""} :relations []}})))
 
 (deftest test-relation-meta-1
   (is (= (meta (build-relation (rdf-ns :rdf) "test" (build-literal "testPredicate")))
@@ -973,7 +988,7 @@
 
 (deftest test-relation-2
   (is (= (build-relation (build-uri (rdf-ns :rdf) "test") (build-literal "testPredicate"))
-         {:value {:prefix :rdf, :value "test"}, :object {:value "testPredicate", :datatype {:prefix :xsd, :value "string"}, :lang ""}})))
+         {:value {:prefix :rdf, :value "test"}, :object {:value {:value "testPredicate", :datatype {:prefix :xsd, :value "string"}, :lang ""} :relations []}})))
 
 (deftest test-relation-meta-2
   (is (= (meta (build-relation (build-uri (rdf-ns :rdf) "test") (build-literal "testPredicate")))
@@ -981,7 +996,7 @@
 
 (deftest test-relation-3
   (is (= (build-relation (build-uri "http://test.com#test_1") (build-literal "testPredicate"))
-         {:value {:prefix "", :value "http://test.com#test_1"}, :object {:value "testPredicate", :datatype {:prefix :xsd, :value "string"}, :lang ""}})))
+         {:value {:prefix "", :value "http://test.com#test_1"}, :object {:value {:value "testPredicate", :datatype {:prefix :xsd, :value "string"}, :lang ""} :relations []}})))
 
 (deftest test-relation-meta-3
   (is (= (meta (build-relation (build-uri "http://teste.com#test_1") (build-literal "testPredicate")))
@@ -989,14 +1004,14 @@
 
 (deftest test-build-node-1
   (is (= (build-node "test" :test [(build-relation "test" (build-uri "test"))])
-         {:value "test", :relations [{:value {:prefix "", :value "test"}, :object {:prefix "", :value "test"}}]})))
+         {:value "test", :relations [{:value {:prefix "", :value "test"}, :object {:value {:prefix "", :value "test"} :relations []}}]})))
 
 (deftest test-build-node-2
   (is (= (build-node "test" :test
                      [(build-relation "test" (build-uri "test"))
                       (build-relation "test2" (build-uri "hola"))])
-         {:value "test", :relations [{:value {:prefix "", :value "test"}, :object {:prefix "", :value "test"}}
-                                     {:value {:prefix "", :value "test2"}, :object {:prefix "", :value "hola"}}]})))
+         {:value "test", :relations [{:value {:prefix "", :value "test"}, :object {:value {:prefix "", :value "test"} :relations []}}
+                                     {:value {:prefix "", :value "test2"}, :object {:value {:prefix "", :value "hola"} :relations []}}]})))
 
 (deftest test-build-node-3
   (is (= (meta (build-node "test" :test [(build-relation "test" (build-uri "test"))]))
@@ -1069,7 +1084,7 @@
     (do
       (is (= (. (sesame-translate (build-relation (rdf-ns :rdf) "test" (build-literal "testPredicate")) (. conn (getValueFactory)))
                 (toString))
-             "{:value #=(org.openrdf.sail.memory.model.MemURI. \"http://www.w3.org/1999/02/22-rdf-syntax-ns#test\"), :object #=(org.openrdf.sail.memory.model.MemLiteral. \"\\\"testPredicate\\\"^^<http://www.w3.org/2001/XMLSchema#string>\")}"))
+             "{:value #=(org.openrdf.sail.memory.model.MemURI. \"http://www.w3.org/1999/02/22-rdf-syntax-ns#test\"), :object {:value #=(org.openrdf.sail.memory.model.MemLiteral. \"\\\"testPredicate\\\"^^<http://www.w3.org/2001/XMLSchema#string>\"), :relations nil}}"))
       (. conn (close)))))
 
 (deftest test-sesame-translate-relation-2
@@ -1659,7 +1674,7 @@
          {:prefix "", :value "http://test.com"})))
 
 (deftest test-to-rdf-3
-  (is (= (to-rdf "\"hooola\"")
+  (is (= (to-rdf "hooola")
          {:value "hooola", :datatype {:prefix :xsd, :value "string"}, :lang ""})))
 
 (deftest test-to-rdf-4

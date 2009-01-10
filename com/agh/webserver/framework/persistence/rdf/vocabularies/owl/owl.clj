@@ -570,6 +570,45 @@
          true))))
 
 
+(defn abox-list-properties-for
+  "Returns a single map with all the properties and values for an individual"
+  ([individual]
+     (loop [class-uris (keys (:properties-value-map individual))
+            acum {}]
+            (if (nil? class-uris)
+              acum
+              (recur (rest class-uris)
+                     (merge acum (get (:properties-value-map individual) (first class-uris))))))))
+
+
+(defn abox-individual-to-graph
+  "Translates an ABox individual to a set of RDF graph"
+  ([individual]
+     (let [ class-uris (loop [classes (:classes individual)
+                              acum (set (map (fn [c] (:uri c)) classes)) ]
+                              (if (nil? classes)
+                                acum
+                                (recur (rest classes)
+                                       (clojure.set/union acum (set (map (fn [c] (:uri c)) (:subclass-of (first classes))))))))
+            properties (abox-list-properties-for individual)
+            types-node (build-uri-node (:uri individual)
+                                       (loop [uris-left class-uris
+                                              acum []]
+                                         (if (nil? uris-left)
+                                           acum
+                                           (recur (rest uris-left)
+                                                  (conj acum (build-relation (rdf-type) (to-rdf (first uris-left))))))))
+           properties-node (build-uri-node (:uri individual)
+                                           (map (fn [property-uri]
+                                                  (let [value-for-prop-uri (get properties property-uri)]
+                                                    (if (= (rdf-meta value-for-prop-uri) :literal)
+                                                      (build-relation (to-rdf property-uri)
+                                                                      (build-literal-node value-for-prop-uri))
+                                                      (build-relation (to-rdf property-uri)
+                                                                      (build-uri-node value-for-prop-uri)))))
+                                                (keys properties))) ]
+       (build-graph [types-node properties-node]))))
+
 (defn abox-create-individual
   "Creates a new individual of a given class"
   ([class-name-or-uri individual-ns props-map]
@@ -616,12 +655,30 @@
                                  " and arguments "
                                  props-map)))))))
 
+(defn abox-create-individual!
+  "Creates a new individual and stores its triplets in the repository"
+  ([class-name-or-uri individual-ns props-map connection]
+     (let [individual (abox-create-individual class-name-or-uri individual-ns props-map)]
+       (do
+         (write-graph-in-repository (abox-individual-to-graph individual) connection)
+         individual))))
 
 (clojure/comment
   "Tests"
 )
 
 (use 'clojure.contrib.test-is)
+
+(defn mock-owl-individual-identifier
+  "Replaces the identifier of an owl individual with a given value so it can be easily tested"
+  ([individual mock-identifier]
+     (with-meta
+      (struct abox-individual
+              mock-identifier
+              (:uri individual)
+              (:classes individual)
+              (:properties-value-map  individual))
+      {:rdf :owl-individual})))
 
 (deftest test-owl-ns
   (is (= (rdf-ns :owl)
@@ -1194,13 +1251,7 @@
                (describe-owl-class "http://test.com/class_b")
                (describe-owl-subclass "http://test.com/class_a" "http://test.com/class_b")
                (describe-owl-class-has-property "http://test.com/class_a" "http://test.com/prop_a")
-               (describe-owl-class-has-property "http://test.com/class_b" "http://test.com/prop_b"))
-        test-template (build-graph-template
-                       [{:template (build-graph
-                                    [(build-variable-node :subject
-                                                          [(build-variable-relation :predicate
-                                                                         (build-variable-node :object))])])
-                         :filters []}])]
+               (describe-owl-class-has-property "http://test.com/class_b" "http://test.com/prop_b"))]
     (do (tbox-clear!)
         (repositories-registry-clear!)
         (connections-clear!)
@@ -1220,9 +1271,103 @@
             (is (= (:properties-value-map individual)
                    {"http://test.com/class_a"
                     {"http://test.com/prop_a" {:value 1, :datatype {:prefix :xsd, :value "decimal"}, :lang ""}
-                     "http://test.com/prop_b" {:value "ol", :datatype {:prefix :xsd, :value "string"}, :lang ""}}})))))))
+                     "http://test.com/prop_b" {:value "hola", :datatype {:prefix :xsd, :value "string"}, :lang ""}}})))))))
 
 (deftest test-abox-create-individual-2
+  (let [repo (init-memory-repository!)
+        graph (describe-tbox
+               (describe-owl-datatype-property "http://test.com/prop_a" (xsd-decimal))
+               (describe-owl-datatype-property "http://test.com/prop_b" (xsd-string))
+               (describe-owl-class "http://test.com/class_a")
+               (describe-owl-class "http://test.com/class_b")
+               (describe-owl-subclass "http://test.com/class_a" "http://test.com/class_b")
+               (describe-owl-class-has-property "http://test.com/class_a" "http://test.com/prop_a")
+               (describe-owl-class-has-property "http://test.com/class_b" "http://test.com/prop_b"))]
+    (do (tbox-clear!)
+        (repositories-registry-clear!)
+        (connections-clear!)
+        (register-repository! :test repo)
+        (write-graph-in-repository graph (connection! :test))
+        (tbox-register-name! :owl-thing (owl-Thing) :test)
+        (tbox-register-name! :class_a "http://test.com/class_a" :test)
+        (tbox-register-name! :class_b "http://test.com/class_b" :test)
+        (tbox-register-name! :prop_a "http://test.com/prop_a" :test)
+        (tbox-register-name! :prop_b "http://test.com/prop_b" :test)
+        (tbox-register-validation-on! :create :prop_a (fn [value-prop]
+                                                        (if (> (:value value-prop) 1)
+                                                          false
+                                                          true)))
+        (is (= (try
+                (do
+                  (abox-create-individual :class_a "http://test.com/individuals#" {:prop_a 15, :prop_b "hola"})
+                  true)
+                (catch Exception _ false))
+               false)))))
+
+(deftest test-list-properties-for-individual-1
+  (let [repo (init-memory-repository!)
+        graph (describe-tbox
+               (describe-owl-datatype-property "http://test.com/prop_a" (xsd-decimal))
+               (describe-owl-datatype-property "http://test.com/prop_b" (xsd-string))
+               (describe-owl-class "http://test.com/class_a")
+               (describe-owl-class "http://test.com/class_b")
+               (describe-owl-subclass "http://test.com/class_a" "http://test.com/class_b")
+               (describe-owl-class-has-property "http://test.com/class_a" "http://test.com/prop_a")
+               (describe-owl-class-has-property "http://test.com/class_b" "http://test.com/prop_b"))]
+    (do (tbox-clear!)
+        (repositories-registry-clear!)
+        (connections-clear!)
+        (register-repository! :test repo)
+        (write-graph-in-repository graph (connection! :test))
+        (tbox-register-name! :owl-thing (owl-Thing) :test)
+        (tbox-register-name! :class_a "http://test.com/class_a" :test)
+        (tbox-register-name! :class_b "http://test.com/class_b" :test)
+        (tbox-register-name! :prop_a "http://test.com/prop_a" :test)
+        (tbox-register-name! :prop_b "http://test.com/prop_b" :test)
+        (is (= (let [individual (abox-create-individual :class_a "http://test.com/individuals#" {:prop_a 15, :prop_b "hola"})]
+                 (abox-list-properties-for individual))
+               {"http://test.com/prop_a" {:value 15, :datatype {:prefix :xsd, :value "decimal"}, :lang ""}
+                "http://test.com/prop_b" {:value "hola", :datatype {:prefix :xsd, :value "string"}, :lang ""}})))))
+
+(deftest test-abox-individual-to-graph-1
+  (let [repo (init-memory-repository!)
+        graph (describe-tbox
+               (describe-owl-datatype-property "http://test.com/prop_a" (xsd-decimal))
+               (describe-owl-datatype-property "http://test.com/prop_b" (xsd-string))
+               (describe-owl-class "http://test.com/class_a")
+               (describe-owl-class "http://test.com/class_b")
+               (describe-owl-subclass "http://test.com/class_a" "http://test.com/class_b")
+               (describe-owl-class-has-property "http://test.com/class_a" "http://test.com/prop_a")
+               (describe-owl-class-has-property "http://test.com/class_b" "http://test.com/prop_b"))]
+    (do (tbox-clear!)
+        (repositories-registry-clear!)
+        (connections-clear!)
+        (register-repository! :test repo)
+        (write-graph-in-repository graph (connection! :test))
+        (tbox-register-name! :owl-thing (owl-Thing) :test)
+        (tbox-register-name! :class_a "http://test.com/class_a" :test)
+        (tbox-register-name! :class_b "http://test.com/class_b" :test)
+        (tbox-register-name! :prop_a "http://test.com/prop_a" :test)
+        (tbox-register-name! :prop_b "http://test.com/prop_b" :test)
+        (let [individual  (abox-create-individual :class_a "http://test.com/individuals#" {:prop_a 15, :prop_b "hola"})
+              individual-identifier (:identifier individual)
+              individual-graph (abox-individual-to-graph individual)]
+          (do
+            (is (= (count (:nodes individual-graph)) 2))
+            (is (= (set (:relations (first (:nodes individual-graph))))
+                   (set [{:value {:prefix :rdf, :value "type"}
+                          :object {:value {:prefix "", :value "http://test.com/class_a"} :relations []}}
+                         {:value {:prefix :rdf, :value "type"}
+                          :object {:value {:prefix "", :value "http://www.w3.org/2002/07/owl#Thing"} :relations []}}
+                         {:value {:prefix :rdf, :value "type"}
+                          :object {:value {:prefix "", :value "http://test.com/class_b"} :relations []}}])))
+            (is (= (set (:relations (second (:nodes individual-graph))))
+                   (set [{:value {:prefix "", :value "http://test.com/prop_a"}
+                          :object {:value {:value 15, :datatype {:prefix :xsd, :value "decimal"}, :lang ""}, :relations []}}
+                         {:value {:prefix "", :value "http://test.com/prop_b"}
+                          :object {:value {:value "hola", :datatype {:value "string", :prefix :xsd}, :lang ""}, :relations []}}]))))))))
+
+(deftest test-abox-create-individual!-1
   (let [repo (init-memory-repository!)
         graph (describe-tbox
                (describe-owl-datatype-property "http://test.com/prop_a" (xsd-decimal))
@@ -1248,13 +1393,58 @@
         (tbox-register-name! :class_b "http://test.com/class_b" :test)
         (tbox-register-name! :prop_a "http://test.com/prop_a" :test)
         (tbox-register-name! :prop_b "http://test.com/prop_b" :test)
-        (tbox-register-validation-on! :create :prop_a (fn [value-prop]
-                                                        (if (> (:value value-prop) 1)
-                                                          false
-                                                          true)))
-        (is (= (try
-                (do
-                  (abox-create-individual :class_a "http://test.com/individuals#" {:prop_a 15, :prop_b "hola"})
-                  true)
-                (catch Exception _ false))
-               false)))))
+        (let [individual (abox-create-individual! :class_a "http://test.com/individuals#" {:prop_a 15, :prop_b "hola"} (connection! :test))
+              identifier (:uri individual)
+              result (query-template-in-repository
+                      :subject :predicate :object
+                      test-template
+                      (connection! :test))]
+          (is (= (set result)
+                 (set [{:object {:prefix "", :value "http://test.com/class_a"}
+                        :predicate {:prefix "", :value "http://www.w3.org/2000/01/rdf-schema#domain"}
+                        :subject {:prefix "", :value "http://test.com/prop_a"}}
+                       {:object {:prefix "", :value "http://test.com/class_b"}
+                        :predicate {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"}
+                        :subject {:prefix "", :value identifier}}
+                       {:object {:prefix "", :value "http://test.com/class_a"}
+                        :predicate {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"}
+                        :subject {:prefix "", :value identifier}}
+                       {:object {:prefix "", :value "http://www.w3.org/2002/07/owl#Thing"}
+                        :predicate {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"}
+                        :subject {:prefix "", :value identifier}}
+                       {:object {:prefix "", :value "http://www.w3.org/2002/07/owl#DatatypeProperty"}
+                        :predicate {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"}
+                        :subject {:prefix "", :value "http://test.com/prop_a"}}
+                       {:object {:prefix "", :value "http://test.com/class_b"}
+                        :predicate {:prefix "", :value "http://www.w3.org/2000/01/rdf-schema#domain"}
+                        :subject {:prefix "", :value "http://test.com/prop_b"}}
+                       {:object {:value "hola", :datatype {:prefix "", :value "http://www.w3.org/2001/XMLSchema#string"}, :lang ""}
+                        :predicate {:prefix "", :value "http://test.com/prop_b"}
+                        :subject {:prefix "", :value identifier}}
+                       {:object {:prefix "", :value "http://www.w3.org/2002/07/owl#Class"}
+                        :predicate {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"}
+                        :subject {:prefix "", :value "http://test.com/class_a"}}
+                       {:object {:prefix "", :value "http://www.w3.org/2001/XMLSchema#string"}
+                        :predicate {:prefix "", :value "http://www.w3.org/2000/01/rdf-schema#range"}
+                        :subject {:prefix "", :value "http://test.com/prop_b"}}
+                       {:object {:prefix "", :value "http://www.w3.org/2002/07/owl#Class"}
+                        :predicate {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"}
+                        :subject {:prefix "", :value "http://test.com/class_b"}}
+                       {:object {:value "15", :datatype {:prefix "", :value "http://www.w3.org/2001/XMLSchema#decimal"}, :lang ""}
+                        :predicate {:prefix "", :value "http://test.com/prop_a"}
+                        :subject {:prefix "", :value identifier}}
+                       {:object {:prefix "", :value "http://www.w3.org/2002/07/owl#DatatypeProperty"}
+                        :predicate {:prefix "", :value "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"}
+                        :subject {:prefix "", :value "http://test.com/prop_b"}}
+                       {:object {:prefix "", :value "http://test.com/class_b"}
+                        :predicate {:prefix "", :value "http://www.w3.org/2000/01/rdf-schema#subClassOf"}
+                        :subject {:prefix "", :value "http://test.com/class_a"}}
+                       {:object {:prefix "", :value "http://www.w3.org/2002/07/owl#Thing"}
+                        :predicate {:prefix "", :value "http://www.w3.org/2000/01/rdf-schema#subClassOf"}
+                        :subject {:prefix "", :value "http://test.com/class_a"}}
+                       {:object {:prefix "", :value "http://www.w3.org/2002/07/owl#Thing"}
+                        :predicate {:prefix "", :value "http://www.w3.org/2000/01/rdf-schema#subClassOf"}
+                        :subject {:prefix "", :value "http://test.com/class_b"}}
+                       {:object {:prefix "", :value "http://www.w3.org/2001/XMLSchema#decimal"}
+                        :predicate {:prefix "", :value "http://www.w3.org/2000/01/rdf-schema#range"}
+                        :subject {:prefix "", :value "http://test.com/prop_a"}}])))))))
