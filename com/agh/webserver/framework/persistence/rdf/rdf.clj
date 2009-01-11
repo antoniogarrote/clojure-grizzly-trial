@@ -86,19 +86,32 @@
       (commute *connections*
                (fn [connections] {})))))
 
+;; checks if the object is a known connection to a repository
+(defmulti connection? class)
+
+(defmethod connection? #=org.openrdf.repository.sail.SailRepositoryConnection [c]
+  "Checks if the connection is a Sail Sesame connection"
+  true)
+
+(defmethod connection? :default [c]
+  "By default we return false, we dont' recognize the connection"
+  false)
+
 (defn connection!
   "Returns a connection for the requested repository, creating it if
    necessary"
   ([repository-name]
-     (dosync
-      (let [connection (get @*connections* repository-name)]
-        (if (nil? connection)
-          (do
-            (commute *connections*
-                     (fn [registry]
-                       (merge registry {repository-name (. (repository repository-name) getConnection)})))
-            (get @*connections* repository-name))
-          connection))))
+     (if (connection? repository-name)
+       repository-name
+       (dosync
+        (let [connection (get @*connections* repository-name)]
+          (if (nil? connection)
+            (do
+              (commute *connections*
+                       (fn [registry]
+                         (merge registry {repository-name (. (repository repository-name) getConnection)})))
+              (get @*connections* repository-name))
+            connection)))))
   ([] (connection! :default)))
 
 
@@ -111,8 +124,6 @@
           (do (dissoc @*connections* repository-name)
               (. connection close))))))
   ([] (close-connection! :default)))
-
-
 
 (clojure/comment
 
@@ -232,26 +243,7 @@
   ([bnode-identifier]
      (:value bnode-identifier)))
 
-;; relations
-(defn build-relation
-  "Builds a new relation for a given URI"
-  ([prefix uri related-object]
-     (let [meta-related (rdf-meta related-object)]
-       (if (= meta-related :uri)
-         (with-meta (struct rdf-relation (build-uri prefix uri) (build-uri-node related-object)) {:rdf :relation})
-         (if (= meta-related :literal)
-           (with-meta (struct rdf-relation (build-uri prefix uri) (build-literal-node related-object)) {:rdf :relation})
-           (with-meta (struct rdf-relation (build-uri prefix uri) related-object) {:rdf :relation})))))
-  ([predicate related-object]
-     (let [meta-related (rdf-meta related-object)
-           to-relate (if (= meta-related :uri)
-                       (build-uri-node related-object)
-                       (if (= meta-related :literal)
-                         (build-literal-node related-object)
-                         related-object)) ]
-       (if (= (rdf-meta predicate) :uri)
-         (with-meta (struct rdf-relation predicate to-relate) {:rdf :relation})
-         (with-meta (struct rdf-relation (build-uri predicate) to-relate) {:rdf :relation})))))
+
 
 ;; nodes
 (defn build-node
@@ -288,6 +280,27 @@
   "Builds a new blank node with a given identifier"
   ([identifier preds]
      (build-node (build-bnode-identifier identifier) :blank-node preds)))
+
+;; relations
+(defn build-relation
+  "Builds a new relation for a given URI"
+  ([prefix uri related-object]
+     (let [meta-related (rdf-meta related-object)]
+       (if (= meta-related :uri)
+         (with-meta (struct rdf-relation (build-uri prefix uri) (build-uri-node related-object)) {:rdf :relation})
+         (if (= meta-related :literal)
+           (with-meta (struct rdf-relation (build-uri prefix uri) (build-literal-node related-object)) {:rdf :relation})
+           (with-meta (struct rdf-relation (build-uri prefix uri) related-object) {:rdf :relation})))))
+  ([predicate related-object]
+     (let [meta-related (rdf-meta related-object)
+           to-relate (if (= meta-related :uri)
+                       (build-uri-node related-object)
+                       (if (= meta-related :literal)
+                         (build-literal-node related-object)
+                         related-object)) ]
+       (if (= (rdf-meta predicate) :uri)
+         (with-meta (struct rdf-relation predicate to-relate) {:rdf :relation})
+         (with-meta (struct rdf-relation (build-uri predicate) to-relate) {:rdf :relation})))))
 
 (defn build-graph
   "Builds a new RDF graph for the provided description"
@@ -601,8 +614,14 @@
   "Translates a RDF graph to a set of triplets-set"
   (str "{ " (reduce (fn [x y] (str x y))
                     ""
-                    (map (fn [node] (second (to-sparql node bindings)))
+                    (map (fn [node]
+                           (let [sparql-returned (to-sparql node bindings)]
+                             (if (seq? sparql-returned) ;; a graph can receive a graph template that does not return (uri . sparql), only sparql
+                               (second sparql-returned)
+                               sparql-returned)))
                          (:nodes obj)))))
+;;                    (map (fn [node] (second (to-sparql node bindings)))
+;;                         (:nodes obj)))))
 
 (defmethod to-sparql :optional-graph [obj bindings]
   "Translates a RDF graph to a SPARQL query"
@@ -611,7 +630,7 @@
 (defmethod to-sparql :sparql-filter [obj bindings]
   "Translates a RDF filter to a SPARQL fragment"
   (if (nil? (get bindings (:identifier obj)))
-    (str "FILTER (" (:value obj) ") .\n")
+    (str  (:value obj) )
     ""))
 
 (defmethod to-sparql :graph-template [obj bindings]
@@ -621,13 +640,21 @@
                             filters (:filters mapping)
                             graph-sparql (to-sparql graph bindings)
                             filters-txt (map (fn [x] (to-sparql x bindings)) filters)
-                            filters-sparql (reduce
-                                            (fn [fa fb] (str fa fb))
-                                            ""
-                                            filters-txt) ]
+                            filters-sparql (let [filter-string (reduce
+                                                                (fn [fa fb] (if (= fa "") (str fa fb) (str fa " && " fb)))
+                                                                ""
+                                                                filters-txt)]
+                                             (if (= filter-string "")
+                                               ""
+                                               (str "FILTER ("
+                                                    filter-string
+                                                    ") .\n")))]
                         (str graph-sparql filters-sparql " }\n")))
                    (:nodes-filters obj)) ]
     (reduce (fn [a b] (str a b)) "" fragments)))
+
+(defmethod to-sparql :default [obj bindings]
+  (throw (Exception. (str "\nCan't transform object: \n\n" obj "\n\n with meta: \n\n" (rdf-meta obj) "\n\n into a SPARQL query"))))
 
 ;; Quering the repository with a RDF template
 
@@ -654,6 +681,9 @@
                      nil))
            bindings-list))))
 
+(defn keyword-to-sparql-var
+  ([kw]
+     (str "?" (. (str kw) (substring 1 (. (str kw) (length)))))))
 
 (defn prepare-query-from-template
   ([args templates bindings]
@@ -743,7 +773,7 @@
 
 
 ;; Persisting triplets into the repository
-(defn write-graph-in-repository
+(defn write-graph-in-repository!
   "Stores the statements in a graph into the provided repository"
   ([graph connection]
      (let [translated-graph (sesame-translate graph (. connection (getValueFactory)))
@@ -756,6 +786,47 @@
                                   (:predicate triplet)
                                   (:object triplet)
                                   (make-array org.openrdf.sail.memory.model.MemURI 0)))
+               (recur (rest triplets))))
+           (. connection (commit)))))))
+
+;; Removing triplets from the repository
+(defn remove-graph-template-from-repository!
+  "Stores the statements in a graph into the provided repository"
+  ([template connection]
+     (let [triplets (let [results (query-template-in-repository :subject :predicate :object template connection)]
+                      (build-triplets-set
+                       (map (fn [result] (with-meta (struct rdf-triplet
+                                                            (:subject result)
+                                                            (:predicate result)
+                                                            (:object result))
+                                                    {:rdf :triplet}))
+                            results)))
+
+           the-triplets (:triplets (sesame-translate triplets (. connection (getValueFactory))))]
+       (loop [triplets the-triplets]
+         (if (not (nil? triplets))
+           (let [triplet (first triplets)]
+             (do
+               (. connection (remove (:subject triplet)
+                                     (:predicate triplet)
+                                     (:object triplet)
+                                     (make-array org.openrdf.sail.memory.model.MemURI 0)))
+               (recur (rest triplets))))
+           (. connection (commit)))))))
+
+(defn remove-graph-from-repository!
+  "Stores the statements in a graph into the provided repository"
+  ([graph connection]
+     (let [translated-graph (sesame-translate graph (. connection (getValueFactory)))
+           the-triplets (:triplets (to-triplets translated-graph))]
+       (loop [triplets the-triplets]
+         (if (not (nil? triplets))
+           (let [triplet (first triplets)]
+             (do
+               (. connection (remove (:subject triplet)
+                                     (:predicate triplet)
+                                     (:object triplet)
+                                     (make-array org.openrdf.sail.memory.model.MemURI 0)))
                (recur (rest triplets))))
            (. connection (commit)))))))
 
@@ -916,6 +987,11 @@
         (repositories-register-restore! original)
         (connections-restore! original-conn))))
 
+(deftest test-connection?
+  (let [connection (. (init-memory-repository!) getConnection)]
+    (do (is (= (connection? connection)
+               true))
+        (. connection close))))
 
 (defn mock-namespace [& parts]
   (if (nil? parts)
@@ -1234,10 +1310,29 @@
                         (build-uri-node :rdf "test-subjectb"
                                         [(build-relation :rdf "relation-2"
                                                          (build-blank-node "testb" []))])])]
-    (do (write-graph-in-repository graph conn)
+    (do (write-graph-in-repository! graph conn)
         (is (= 2
                (. conn (size (make-array org.openrdf.sail.memory.model.MemURI 0)))))
         (. conn (close)))))
+
+(deftest test-remove-from-repository
+  (let [repo (init-memory-repository!)
+        conn (. repo (getConnection))
+        graph (build-graph
+                       [(build-uri-node :rdf "test-subjecta"
+                                        [(build-relation :rdf "relation-1"
+                                                         (build-blank-node "testa" []))])
+                        (build-uri-node :rdf "test-subjectb"
+                                        [(build-relation :rdf "relation-2"
+                                                         (build-blank-node "testb" []))])])]
+    (do (write-graph-in-repository! graph conn)
+        (is (= 2
+               (. conn (size (make-array org.openrdf.sail.memory.model.MemURI 0)))))
+        (remove-graph-from-repository! graph conn)
+        (is (= 0
+               (. conn (size (make-array org.openrdf.sail.memory.model.MemURI 0)))))
+        (. conn (close)))))
+
 
 
 (deftest test-to-sparql-1
@@ -1306,7 +1401,7 @@
                        :filters [(build-filter :x "?x < 25")
                                  (build-filter :y "isURI(?y)")]}])
                      {})
-         "OPTIONAL { ?x <http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1> \"test\"@es_ES .\n_:a ?y <http://www.w3.org/1999/02/22-rdf-syntax-ns#testb> .\nFILTER (?x < 25) .\nFILTER (isURI(?y)) .\n }\n")))
+         "OPTIONAL { ?x <http://www.w3.org/1999/02/22-rdf-syntax-ns#relation-1> \"test\"@es_ES .\n_:a ?y <http://www.w3.org/1999/02/22-rdf-syntax-ns#testb> .\nFILTER (?x < 25 && isURI(?y)) .\n }\n")))
 
 (deftest test-to-sparql-8
   (is (= (to-sparql (build-graph-template
@@ -1333,6 +1428,20 @@
              :filters []}])
           {})
          "{ ?x <http://www.w3.org/1999/02/22-rdf-syntax-ns#test-relation> ?y .\n }\n")))
+
+(deftest test-to-sparql-10
+  (is (= (to-sparql (build-graph-template
+                     [{:template (build-graph
+                                  [(build-variable-node :person
+                                                        [(build-relation :rdf "name"
+                                                                         (build-variable-node :name))])
+                                   (build-graph-template [{ :template (build-optional-graph [ (build-variable-node :person
+                                                                                                                   [ (build-relation :rdf "knows"
+                                                                                                                                     (build-variable-node :x))])])
+                                                           :filters [(build-filter :x "?x = \"Java\"")]}])])
+                       :filters [(build-filter :x "! bound(?x)")]}])
+                     {})
+         "{ ?person <http://www.w3.org/1999/02/22-rdf-syntax-ns#name> ?name .\nOPTIONAL { ?person <http://www.w3.org/1999/02/22-rdf-syntax-ns#knows> ?x .\nFILTER (?x = \"Java\") .\n }\nFILTER (! bound(?x)) .\n }\n")))
 
 (deftest test-prepare-bindings-1
   (is (= (prepare-bindings '(:x :y {:z "test"}))
@@ -1371,7 +1480,7 @@
                          :filters []}])
                query (. conn (prepareTupleQuery (. QueryLanguage SPARQL) sparql))]
            (do
-             (write-graph-in-repository graph conn)
+             (write-graph-in-repository! graph conn)
              (let [ result  (. query (evaluate))
                      binded (. (. result next) (getValue "y")) ]
                (. conn (close))
@@ -1398,7 +1507,7 @@
                          :filters []}])
                query (. conn (prepareTupleQuery (. QueryLanguage SPARQL) sparql))]
            (do
-             (write-graph-in-repository graph conn)
+             (write-graph-in-repository! graph conn)
              (let [ result  (. query (evaluate))
                      binded (. (. result next) (getValue "x")) ]
                (. conn (close))
@@ -1425,7 +1534,7 @@
                          :filters []}])
                query (. conn (prepareTupleQuery (. QueryLanguage SPARQL) sparql))]
            (do
-             (write-graph-in-repository graph conn)
+             (write-graph-in-repository! graph conn)
              (let [ result  (. query (evaluate))
                      binded (. (. result next) (getValue "y")) ]
                (. conn (close))
@@ -1444,7 +1553,7 @@
                                        [(build-relation :rdf "relation-2"
                                                         (build-blank-node "testb" []))])])]
            (do
-             (write-graph-in-repository graph conn)
+             (write-graph-in-repository! graph conn)
              (let [result (query-template-in-repository
                            :y
                            [{:template (build-graph
@@ -1472,7 +1581,7 @@
                                             [(build-relation :rdf "relation-2"
                                                              (build-blank-node "testb" []))])])]
                 (do
-                  (write-graph-in-repository graph conn)
+                  (write-graph-in-repository! graph conn)
                   (let [result (query-template-in-repository
                                 :y
                                 [{:template (build-graph
@@ -1501,7 +1610,7 @@
                                             [(build-relation :rdf "relation-2"
                                                              (build-blank-node "testb" []))])])]
                 (do
-                  (write-graph-in-repository graph conn)
+                  (write-graph-in-repository! graph conn)
                   (let [result (query-template-in-repository
                                 :x :y
                                 [{:template (build-graph
@@ -1532,7 +1641,7 @@
                                             [(build-relation :rdf "relation-2"
                                                              (build-blank-node "testb" []))])])]
                 (do
-                  (write-graph-in-repository graph conn)
+                  (write-graph-in-repository! graph conn)
                   (let [result (query-template-in-repository
                                 :x :y :z
                                 [{:template (build-graph
@@ -1566,7 +1675,7 @@
                                        [(build-relation :rdf "relation-2"
                                                         (build-blank-node "testb" []))])])]
            (do
-             (write-graph-in-repository graph conn)
+             (write-graph-in-repository! graph conn)
              (let [result (query-template-in-repository
                            :x :y :z
                            [{:template (build-graph
@@ -1603,7 +1712,7 @@
                                                                                         :z []))])])
                                                 :filters []}])]
            (do
-             (write-graph-in-repository graph conn)
+             (write-graph-in-repository! graph conn)
              (let [result (query-template-in-repository
                            :x :y :z
                            template
@@ -1636,7 +1745,7 @@
                                         (build-relation :rdf "relation-1"
                                                         (build-uri-node "http://test.com/d"))])]) ]
            (do
-             (write-graph-in-repository graph conn)
+             (write-graph-in-repository! graph conn)
              (let [result (query-transitive-closure-for-predicate "http://test.com/a" (build-uri :rdf "relation-1") conn)]
                (do
                  (. conn close)
@@ -1658,7 +1767,7 @@
                                         (build-relation :rdf "relation-1"
                                                         (build-uri-node "http://test.com/d"))])]) ]
            (do
-             (write-graph-in-repository graph conn)
+             (write-graph-in-repository! graph conn)
              (let [result (query-transitive-closure-for-predicate "http://test.com/d" (build-uri :rdf "relation-1") conn)]
                (do
                  (. conn close)
