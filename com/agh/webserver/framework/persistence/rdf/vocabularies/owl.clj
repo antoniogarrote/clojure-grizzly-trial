@@ -537,6 +537,30 @@
              (throw (Exception. (str "Unknown resource kind for URI" uri-str)))))))
          existing-resource))))
 
+(defn tbox-datatype-property?
+  "Checks if a given resource is a datatype property"
+  ([resource]
+     (let [uri (if (keyword? resource)
+                 (tbox-find-class-by-uri! resource)
+                 resource)]
+       (if (= (rdf-meta (tbox-find-resource-by-uri! uri))
+              :owl-datatype-property)
+         true
+         false))))
+
+(defn tbox-object-property?
+  "Checks if a given resource is a object property"
+  ([resource]
+     (let [uri (if (keyword? resource)
+                 (tbox-find-class-by-uri! resource)
+                 resource)]
+       (if (= (rdf-meta (tbox-find-resource-by-uri! uri))
+              :owl-object-property)
+         true
+         false))))
+
+
+
 (defn tbox-register-name!
   "Maps a name to an URI in the TBox"
   ([name uri kind]
@@ -612,6 +636,8 @@
   :uri ;; the URI identifying this individual, composed of a namespace and the UUID
   :classes ;; the owl classes this individual belongs to
   :properties-value-map ;; map with class -> {:property-name value} maps
+  :dirty-properties ;; props with value not stored in the repository
+  :created ;; true if the individual has been created and has not been saved yet
 )
 
 (defn gen-id
@@ -648,12 +674,13 @@
 (defn abox-list-properties-for
   "Returns a single map with all the properties and values for an individual"
   ([individual]
-     (loop [class-uris (keys (:properties-value-map individual))
-            acum {}]
-            (if (nil? class-uris)
-              acum
-              (recur (rest class-uris)
-                     (merge acum (get (:properties-value-map individual) (first class-uris))))))))
+     (:properties-value-map individual)))
+;;     (loop [class-uris (keys (:properties-value-map individual))
+;;            acum {}]
+;;            (if (nil? class-uris)
+;;              acum
+;;              (recur (rest class-uris)
+;;                     (merge acum (get (:properties-value-map individual) (first class-uris))))))))
 
 
 (defn abox-individual-to-graph
@@ -665,14 +692,14 @@
                                 acum
                                 (recur (rest classes)
                                        (clojure.set/union acum (set (map (fn [c] (:uri c)) (:subclass-of (first classes))))))))
-            properties (abox-list-properties-for individual)
-            types-node (build-uri-node (:uri individual)
-                                       (loop [uris-left class-uris
-                                              acum []]
-                                         (if (nil? uris-left)
-                                           acum
-                                           (recur (rest uris-left)
-                                                  (conj acum (build-relation (rdf-type) (to-rdf (first uris-left))))))))
+           properties (abox-list-properties-for individual)
+           types-node (build-uri-node (:uri individual)
+                                      (loop [uris-left class-uris
+                                             acum []]
+                                        (if (nil? uris-left)
+                                          acum
+                                          (recur (rest uris-left)
+                                                 (conj acum (build-relation (rdf-type) (to-rdf (first uris-left))))))))
            properties-node (build-uri-node (:uri individual)
                                            (map (fn [property-uri]
                                                   (let [value-for-prop-uri (get properties property-uri)]
@@ -683,6 +710,7 @@
                                                                       (build-uri-node value-for-prop-uri)))))
                                                 (keys properties))) ]
        (build-graph [types-node properties-node]))))
+
 
 (defn abox-create-individual
   "Creates a new individual of a given class"
@@ -723,7 +751,9 @@
                       uuid
                       (str ns-uri uuid)
                       (set [owl-class])
-                      {(:uri owl-class) rdf-props-map})
+                      rdf-props-map
+                      (set[(keys rdf-props-map)])
+                      true)
               {:rdf :owl-individual})))
          (throw (Exception. (str "Validations failed for resource "
                                  uri
@@ -736,9 +766,18 @@
      (let [individual (abox-create-individual class-name-or-uri individual-ns props-map)]
        (do
          (write-graph-in-repository! (abox-individual-to-graph individual) (connection! connection))
-         individual)))
+         (with-meta
+          (struct abox-individual
+                  (:identifier individual)
+                  (:uri individual)
+                  (:classes individual)
+                  (:properties-value-map individual)
+                  (set [])
+                  false)
+          {:rdf :owl-individual}))))
   ([class-name-or-uri individual-ns props-map]
      (abox-create-individual! class-name-or-uri individual-ns props-map (connection! :default))))
+
 
 ;; ABox individuals finder
 
@@ -774,9 +813,7 @@
                                           (connection! connection))]
                         (reduce (fn [acum item] (merge acum item))
                                 {}
-                                (map (fn [result] (let [name (let [name-for-uri (tbox-find-name-for-uri (:uri result))]
-                                                               (if (nil? name-for-uri) name name-for-uri))]
-                                                    {name (:obj result)}))
+                                (map (fn [result] {(uri-to-string (:uri result)) (:obj result)})
                                      classes-uris)))]
 ;;           datatype-properties (filter (fn [prop] (= (rdf-meta prop) :owl-datatype-property)) properties)
 ;;           object-properties (filter (fn [prop] (= (rdf-meta prop) :owl-object-property)) properties)]
@@ -785,9 +822,10 @@
                 (parse-id uri)
                 uri
                 (set classes)
-                properties)
+                properties
+                (set [])
+                false)
        {:rdf :owl-individual}))))
-
 
 
 ;; Some functions modelling conditions to be used when building individual finders
@@ -826,6 +864,7 @@
           :filters (map (fn [key] (build-filter key (str " ! bound(" (keyword-to-sparql-var key) ")")))
                         (keys classes-map))}))))
 
+
 ;; TBox/ABox resource removal
 
 (defn tbox-resource-triplets
@@ -853,7 +892,68 @@
        (tbox-resource-triplets (:uri value))
        (tbox-resource-triplets value))))
 
-(clojure/comment
+
+;; ABox update
+
+(defn abox-update-individual-properties
+  "Updates the values for the properties of an individual"
+  ([individual properties-to-update]
+     (let [uris-to-update (reduce
+                           (fn [acum item] (merge acum item))
+                           {}
+                           (map (fn [key]
+                                 (let [uri (if (keyword? key)
+                                             (uri-to-string (tbox-retrieve-uri-for key))
+                                             (uri-to-string key))]
+                                     {uri (to-rdf (get properties-to-update key))}))
+                               (keys properties-to-update)))
+           updated-properties (loop [ the-properties (keys uris-to-update)
+                                      the-updated-props (:properties-value-map individual) ]
+                                (if (nil? the-properties)
+                                  the-updated-props
+                                  (recur (rest the-properties)
+                                         (let [the-key (first the-properties)
+                                               dissoced-map (dissoc uris-to-update the-key)]
+                                         (assoc dissoced-map the-key (get uris-to-update the-key))))))
+           updated-dirty-properties (set (clojure.set/union (:dirty-properties individual) (set (keys uris-to-update)))) ]
+
+       (with-meta
+        (struct abox-individual
+                (:identifier individual)
+                (:uri individual)
+                (:classes individual)
+                updated-properties
+                updated-dirty-properties
+                (:created individual))
+        {:rdf :owl-individual}))))
+
+
+;; ABox save
+(comment
+(defn abox-save-individual!
+  "Saves the state of an individual into the repository"
+  ([individual connection]
+     (if (:created individual)
+       (abox-create-individual! individual connection)
+       (let [uri (:uri individual)
+             dirty-properties (:dirty-properties individual)
+             properties (:properties-value-map individual)
+             properties-to-delete (filter (fn [key] (nil? (get dirty-properties key))) (keys properties))
+             properties-to-update (filter (fn [key] (not (nil? (get dirty-properties key)))) (keys properties))]
+         (do
+           (loop [to-delete properties-to-delete]
+             (when (not (nil? to-delete))
+               (let [property (first to-delete)
+                     template (build-graph-template [{:template (build-graph [ (build-uri-node [ (build-relation property
+                                                                                                                 (if (tbox-datatype-property? property)
+                                                                                                                   (build-literal-node (to-rdf (get properties property)))
+                                                                                                                   (build-uri-node (get properties property)))) ])])
+                                                      :filters []}])
+                     result (query-template-in-repository)
+]))))))))
+)
+
+(comment
   "Tests"
 )
 
@@ -867,7 +967,9 @@
               mock-identifier
               (:uri individual)
               (:classes individual)
-              (:properties-value-map  individual))
+              (:properties-value-map  individual)
+              (set [])
+              true)
       {:rdf :owl-individual})))
 
 (deftest test-owl-ns
@@ -1360,48 +1462,26 @@
         (tbox-register-datatype-property! :prop_a "http://test.com/prop_a" :test)
         (tbox-register-datatype-property! :prop_b "http://test.com/prop_b" :test)
         (let [class-recovered (tbox-find-class-by-uri! "http://test.com/class_a")]
-          (do (is (= class-recovered
-                     {:name :class_a
-                      :uri "http://test.com/class_a"
-                      :subclass-of #{{:name :class_b
-                                      :uri {:prefix "", :value "http://test.com/class_b"}
-                                      :subclass-of #{{:name :owl-thing
-                                                      :uri {:prefix "", :value "http://www.w3.org/2002/07/owl#Thing"}
-                                                      :subclass-of #{}
-                                                      :datatype-properties #{}
-                                                      :object-properties #{}
-                                                      :repository-name :test}}
-                                      :datatype-properties #{}
-                                      :object-properties #{}
-                                      :repository-name :test}
-                                     {:name :owl-thing
-                                      :uri {:prefix "", :value "http://www.w3.org/2002/07/owl#Thing"}
-                                      :subclass-of #{}
-                                      :datatype-properties #{}
-                                      :object-properties #{}
-                                      :repository-name :test}
-                                     {:name :class_c
-                                      :uri {:prefix "", :value "http://test.com/class_c"}
-                                      :subclass-of #{{:name :owl-thing
-                                                      :uri {:prefix "", :value "http://www.w3.org/2002/07/owl#Thing"}
-                                                      :subclass-of #{}
-                                                      :datatype-properties #{}
-                                                      :object-properties #{}
-                                                      :repository-name :test}}
-                                      :datatype-properties #{}
-                                      :object-properties #{}
-                                      :repository-name :test}}
-                      :datatype-properties #{{:name :prop_a
+          (do (is (= (:name class-recovered)
+                     :class_a))
+              (is (= (:uri class-recovered)
+                     "http://test.com/class_a"))
+              (is (= (count (:subclass-of class-recovered))
+                     3))
+              (is (= (first (:datatype-properties class-recovered))
+                     {:name :prop_a
                                               :uri {:prefix "", :value "http://test.com/prop_a"}
                                               :range {:prefix "", :value "http://www.w3.org/2001/XMLSchema#float"}
                                               :equivalent-properties #{}
-                                              :repository-name :test}}
-                      :object-properties #{{:name :prop_b
+                                              :repository-name :test}))
+              (is (= (first (:object-properties class-recovered))
+                     {:name :prop_b
                                             :uri {:prefix "", :value "http://test.com/prop_b"}
                                             :equivalent-properties #{}
-                                            :repository-name :test}}
-                      :repository-name :test}
-                     (close-connection! (connection! :test)))))))))
+                                            :repository-name :test}))
+              (is (= (:repository-name class-recovered) :test))
+              (is (= (count (keys class-recovered)) 6))
+              (close-connection! (connection! :test)))))))
 
 (deftest test-find-class-by-uri-1
   (let [repo (init-memory-repository!)
@@ -1500,9 +1580,8 @@
             (is (= (nil? (:identifier individual) )
                    false))
             (is (= (:properties-value-map individual)
-                   {"http://test.com/class_a"
-                    {"http://test.com/prop_a" {:value 1, :datatype {:prefix :xsd, :value "decimal"}, :lang ""}
-                     "http://test.com/prop_b" {:value "hola", :datatype {:prefix :xsd, :value "string"}, :lang ""}}})))))))
+                   {"http://test.com/prop_a" {:value 1, :datatype {:prefix :xsd, :value "decimal"}, :lang ""}
+                    "http://test.com/prop_b" {:value "hola", :datatype {:prefix :xsd, :value "string"}, :lang ""}})))))))
 
 (deftest test-abox-create-individual-2
   (let [repo (init-memory-repository!)
@@ -1874,7 +1953,9 @@
                                   :repository-name :test}
                                  {:name :owl-thing, :uri {:prefix "", :value "http://www.w3.org/2002/07/owl#Thing"}
                                   :subclass-of #{}, :datatype-properties #{}, :object-properties #{}, :repository-name :test}])
-                  :properties-value-map {:prop_c {:value "35", :datatype {:prefix "", :value "http://www.w3.org/2001/XMLSchema#decimal"}, :lang ""}}})))))))
+                  :properties-value-map {"http://test.com/prop_c" {:value "35", :datatype {:prefix "", :value "http://www.w3.org/2001/XMLSchema#decimal"}, :lang ""}}
+                  :dirty-properties #{}
+                  :created false})))))))
 
 (deftest test-abox-remove-resource-triplets-1
   (let [repo (init-memory-repository!)
@@ -1910,3 +1991,40 @@
                        (not-instance-of-classes :class_a)
                        (connection! :test)))
                      0)))))))
+
+(deftest test-abox-update-properties-1
+  (let [repo (init-memory-repository!)
+        graph (describe-tbox
+               (describe-owl-datatype-property "http://test.com/prop_a" (xsd-decimal))
+               (describe-owl-datatype-property "http://test.com/prop_b" (xsd-string))
+               (describe-owl-datatype-property "http://test.com/prop_c" (xsd-decimal))
+               (describe-owl-class "http://test.com/class_a")
+               (describe-owl-class "http://test.com/class_b")
+               (describe-owl-class "http://test.com/class_c")
+               (describe-owl-subclass "http://test.com/class_a" "http://test.com/class_b"))]
+    (do (tbox-clear!)
+        (repositories-registry-clear!)
+        (connections-clear!)
+        (register-repository! :test repo)
+        (write-graph-in-repository! graph (connection! :test))
+        (tbox-register-class! :owl-thing (owl-Thing) :test)
+        (tbox-register-class! :class_a "http://test.com/class_a" :test)
+        (tbox-register-class! :class_b "http://test.com/class_b" :test)
+        (tbox-register-class! :class_c "http://test.com/class_c" :test)
+        (tbox-register-datatype-property! :prop_a "http://test.com/prop_a" :test)
+        (tbox-register-datatype-property! :prop_b "http://test.com/prop_b" :test)
+        (tbox-register-object-property! :prop_c "http://test.com/prop_c" :test)
+        (abox-create-individual! :class_a "http://test.com/individuals#" {:prop_a 15, :prop_b "hola"} (connection! :test))
+        (abox-create-individual! :class_a "http://test.com/individuals#" {:prop_a 95, :prop_b "adios"} (connection! :test))
+        (abox-create-individual! :class_c "http://test.com/individuals#" {:prop_c 35} (connection! :test))
+        (let [result (abox-find-individual-uris!
+                      (not-instance-of-classes :class_a)
+                      (connection! :test))
+              updated-result (abox-update-individual-properties
+                              result
+                              {:prop_c 46})]
+          (do
+            (is (= (:properties-value-map updated-result)
+                   {"http://test.com/prop_c" {:value 46, :datatype {:prefix :xsd, :value "decimal"}, :lang ""}}))
+            (is (= (:dirty-properties updated-result)
+                   (set ["http://test.com/prop_c"]))))))))

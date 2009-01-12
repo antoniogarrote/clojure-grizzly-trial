@@ -1,4 +1,4 @@
-(clojure/comment
+(comment
   "XML Schema vocabulary"
 )
 
@@ -56,7 +56,7 @@
   (literal-decimal something))
 
 
-(clojure/comment
+(comment
   "Tests"
 )
 

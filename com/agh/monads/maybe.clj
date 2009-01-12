@@ -1,4 +1,4 @@
-(clojure/comment
+(comment
    "A sample implementation of the Maybe monad from Haskell"
 )
 
@@ -26,7 +26,7 @@
   {:monad :Maybe}
   [v] (return :Maybe :Just v))
 
-(defn nothing 
+(defn nothing
   "Createas a new Maybe monad with Nothing"
   {:monad :Maybe}
   [] (return :Maybe :Nothing nil))
@@ -40,7 +40,7 @@
           (f (:content m))))
 
 
-(clojure/comment
+(comment
   "tests"
 )
 
@@ -69,7 +69,7 @@
                               check-random         ))
         :Maybe)))
 
-(clojure/comment
+(comment
 
 (deftest test-maybe-monad-lambdas
   (is (= (>>= (fn [y] (just (str y x "a")))
@@ -80,11 +80,11 @@
 
 )
 
-(clojure/comment
+(comment
 
    (do-b->>= (just "") (check-random :as x)
                        (check-random :as y)
-                       (fn [] (do (println (str x y)) 
+                       (fn [] (do (println (str x y))
                                   (check-random))))
 
 )

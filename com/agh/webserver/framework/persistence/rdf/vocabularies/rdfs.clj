@@ -1,4 +1,4 @@
-(clojure/comment
+(comment
   "RDF Schema vocabulary"
 )
 
@@ -21,7 +21,7 @@
   (build-uri (rdf-ns :rdfs) "domain"))
 
 
-(clojure/comment
+(comment
   "Tests"
 )
 

@@ -125,7 +125,7 @@
               (. connection close))))))
   ([] (close-connection! :default)))
 
-(clojure/comment
+(comment
 
 (defn test-rdf-repo []
   (init-repository "com.mysql.jdbc.Driver" "jdbc:mysql://localhost:3306/clojure_sesame" "root" "root"))
@@ -705,6 +705,7 @@
            args (collect-vars bindings-list)]
        (prepare-query-from-template args templates bindings))))
 ;;;;;;;;;;;;;;;;;;;;;;;;
+
 (defn query-template-in-repository
   "Queries the repository with the provided template"
     ([& args]
@@ -730,6 +731,33 @@
                                args)]
                (recur (conj results new-result)))
              results))))))
+
+(defn check-graph-in-repository
+  "Checks if the provided graph exists in the repository"
+  ([graph connection]
+     (let [translated-graph (sesame-translate graph (. connection (getValueFactory)))
+           the-triplets (:triplets (to-triplets translated-graph))]
+       (loop [triplets the-triplets]
+         (if (not (nil? triplets))
+           (let [triplet (first triplets)]
+             (if (. connection (hasStatement (:subject triplet)
+                                             (:predicate triplet)
+                                             (:object triplet)
+                                             false
+                                             (make-array org.openrdf.sail.memory.model.MemURI 0)))
+               (recur (rest triplets))
+               false))
+             true)))))
+
+(defn check-template-in-repository
+  "Queries the repository with the provided template"
+    ([& args]
+     (let [connection (last args)
+           template-or-map (last (drop-last args))
+           template (if (is-rdf-meta? template-or-map) template-or-map (build-graph-template template-or-map))
+           bindings-list (drop-last 2 args)
+           graph (template-to-graph template bindings-list)]
+       (check-graph-in-repository graph connection))))
 
 (defn query-transitive-closure-for-predicate
   "Computes the transitive closuer of a property of a subject"
@@ -931,7 +959,7 @@
     (build-uri something)))
 
 
-(clojure/comment
+(comment
   "Tests"
 )
 
@@ -1160,7 +1188,7 @@
     (do
       (is (= (. (sesame-translate (build-relation (rdf-ns :rdf) "test" (build-literal "testPredicate")) (. conn (getValueFactory)))
                 (toString))
-             "{:value #=(org.openrdf.sail.memory.model.MemURI. \"http://www.w3.org/1999/02/22-rdf-syntax-ns#test\"), :object {:value #=(org.openrdf.sail.memory.model.MemLiteral. \"\\\"testPredicate\\\"^^<http://www.w3.org/2001/XMLSchema#string>\"), :relations nil}}"))
+             "{:value #<MemURI http://www.w3.org/1999/02/22-rdf-syntax-ns#test>, :object {:value #<MemLiteral \"testPredicate\"^^<http://www.w3.org/2001/XMLSchema#string>>, :relations nil}}"))
       (. conn (close)))))
 
 (deftest test-sesame-translate-relation-2
@@ -1177,7 +1205,7 @@
     (do
       (is (= (. (sesame-translate (build-uri-node :rdf "test" [(build-relation :rdf "test" (build-uri-node :rdf "test" []))]) (. conn (getValueFactory)))
                 (toString))
-             "{:value #=(org.openrdf.sail.memory.model.MemURI. \"http://www.w3.org/1999/02/22-rdf-syntax-ns#test\"), :relations ({:value #=(org.openrdf.sail.memory.model.MemURI. \"http://www.w3.org/1999/02/22-rdf-syntax-ns#test\"), :object {:value #=(org.openrdf.sail.memory.model.MemURI. \"http://www.w3.org/1999/02/22-rdf-syntax-ns#test\"), :relations nil}})}"))
+             "{:value #<MemURI http://www.w3.org/1999/02/22-rdf-syntax-ns#test>, :relations ({:value #<MemURI http://www.w3.org/1999/02/22-rdf-syntax-ns#test>, :object {:value #<MemURI http://www.w3.org/1999/02/22-rdf-syntax-ns#test>, :relations nil}})}"))
       (. conn (close)))))
 
 (deftest test-sesame-translate-uri-node-2
@@ -1194,7 +1222,7 @@
     (do
       (is (= (. (sesame-translate (build-literal-node "test") (. conn (getValueFactory)))
                 (toString))
-             "{:value #=(org.openrdf.sail.memory.model.MemLiteral. \"\\\"test\\\"^^<http://www.w3.org/2001/XMLSchema#string>\"), :relations nil}"))
+             "{:value #<MemLiteral \"test\"^^<http://www.w3.org/2001/XMLSchema#string>>, :relations nil}"))
       (. conn (close)))))
 
 (deftest test-sesame-translate-literal-node-2
@@ -1214,7 +1242,7 @@
                                                        (build-uri (rdf-ns :rdf) "predicate")
                                                        (build-uri (rdf-ns :rdf) "object"))
                                                {:rdf :triplet}) (. conn (getValueFactory))))
-             "{:subject #=(org.openrdf.sail.memory.model.MemURI. \"http://www.w3.org/1999/02/22-rdf-syntax-ns#subject\"), :predicate #=(org.openrdf.sail.memory.model.MemURI. \"http://www.w3.org/1999/02/22-rdf-syntax-ns#predicate\"), :object #=(org.openrdf.sail.memory.model.MemURI. \"http://www.w3.org/1999/02/22-rdf-syntax-ns#object\")}"))
+             "{:subject #<MemURI http://www.w3.org/1999/02/22-rdf-syntax-ns#subject>, :predicate #<MemURI http://www.w3.org/1999/02/22-rdf-syntax-ns#predicate>, :object #<MemURI http://www.w3.org/1999/02/22-rdf-syntax-ns#object>}"))
       (. conn (close)))))
 
 (deftest test-add-triplet-1
@@ -1773,6 +1801,77 @@
                  (. conn close)
                  (set result)))))
          (set []))))
+
+(deftest test-check-graph-in-repository-1
+  (let [repo (init-memory-repository!)
+        conn (. repo getConnection)
+        graph (build-graph
+               [(build-uri-node "http://test.com/a"
+                                [(build-relation :rdf "relation-1"
+                                                 (build-uri-node "http://test.com/b"))])
+                (build-uri-node "http://test.com/b"
+                                [(build-relation :rdf "relation-1"
+                                                 (build-uri-node "http://test.com/c"))
+                                 (build-relation :rdf "relation-1"
+                                                 (build-uri-node "http://test.com/d"))])]) ]
+    (do
+      (write-graph-in-repository! graph conn)
+      (let [result (check-graph-in-repository
+                    (build-graph [(build-uri-node "http://test.com/a"
+                                                  [(build-relation :rdf "relation-1"
+                                                                   (build-uri-node "http://test.com/b"))])])
+                    conn)]
+        (do
+          (. conn close)
+          (is (= result true)))))))
+
+(deftest test-check-graph-in-repository-2
+  (let [repo (init-memory-repository!)
+        conn (. repo getConnection)
+        graph (build-graph
+               [(build-uri-node "http://test.com/a"
+                                [(build-relation :rdf "relation-1"
+                                                 (build-uri-node "http://test.com/b"))])
+                (build-uri-node "http://test.com/b"
+                                [(build-relation :rdf "relation-1"
+                                                 (build-uri-node "http://test.com/c"))
+                                 (build-relation :rdf "relation-1"
+                                                 (build-uri-node "http://test.com/d"))])]) ]
+    (do
+      (write-graph-in-repository! graph conn)
+      (let [result (check-graph-in-repository
+                    (build-graph [(build-uri-node "http://test.com/a"
+                                                  [(build-relation :rdf "relation-1"
+                                                                   (build-uri-node "http://test.com/NON_EXISTANT"))])])
+                    conn)]
+        (do
+          (. conn close)
+          (is (= result false)))))))
+
+(deftest test-check-graph-in-repository-3
+  (let [repo (init-memory-repository!)
+        conn (. repo getConnection)
+        graph (build-graph
+               [(build-uri-node "http://test.com/a"
+                                [(build-relation :rdf "relation-1"
+                                                 (build-uri-node "http://test.com/b"))])
+                (build-uri-node "http://test.com/b"
+                                [(build-relation :rdf "relation-1"
+                                                 (build-uri-node "http://test.com/c"))
+                                 (build-relation :rdf "relation-1"
+                                                 (build-uri-node "http://test.com/d"))])]) ]
+    (do
+      (write-graph-in-repository! graph conn)
+      (let [result (check-graph-in-repository
+                    (build-graph [(build-uri-node "http://test.com/b"
+                                                  [(build-relation :rdf "relation-1"
+                                                                   (build-uri-node "http://test.com/c"))
+                                                   (build-relation :rdf "relation-1"
+                                                                   (build-uri-node "http://test.com/d"))])])
+                    conn)]
+        (do
+          (. conn close)
+          (is (= result true)))))))
 
 (deftest test-to-rdf-1
   (is (= (to-rdf {:a 1})

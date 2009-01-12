@@ -1,4 +1,4 @@
-(clojure/comment
+(comment
  "A simple implementation of a monadic system"
 )
 

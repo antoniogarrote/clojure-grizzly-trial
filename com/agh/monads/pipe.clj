@@ -1,4 +1,4 @@
-(clojure/comment
+(comment
  "A monad wrapping a piece of state such as a hash map and transforms
   it sequentially"
 )
@@ -11,7 +11,7 @@
   (:use com.agh.monads)
   (:use com.agh.utils))
 
-(defn applied-to 
+(defn applied-to
   "Wraps the data into the pipe monad"
   {:monad :Pipe}
   ([data] (return :Pipe data)))
@@ -30,7 +30,7 @@
       (return :Pipe (assoc state keyword (func current-value))))))
 
 
-(clojure/comment
+(comment
   "tests"
 )
 

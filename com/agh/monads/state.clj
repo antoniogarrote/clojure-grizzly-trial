@@ -1,4 +1,4 @@
-(clojure/comment
+(comment
  "A monad wrapping a piece of state such as a hash map and transforms
   it sequentially"
 )

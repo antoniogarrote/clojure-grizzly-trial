@@ -314,7 +314,7 @@
           tmp
           (recur (rest combinators) (>>= (first combinators) tmp)))))))
 
-(clojure/comment
+(comment
   "Tests"
 )
 

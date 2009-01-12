@@ -1,4 +1,4 @@
-(clojure/comment
+(comment
  "Some commons utilities for clojure development"
 )
 
@@ -34,7 +34,7 @@
    curry(f) = lambda(x).f(x,y)."
   `(fn [x#] (~func ~@args x#)))
 
-(clojure/comment
+(comment
 
 (defmacro c_ [& args]
   "Convenience notation for currying"
@@ -91,7 +91,7 @@
 
 
 
-(clojure/comment
+(comment
   "Tests"
 )
 

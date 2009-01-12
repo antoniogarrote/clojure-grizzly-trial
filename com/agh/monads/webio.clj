@@ -1,4 +1,4 @@
-(clojure/comment
+(comment
  "WebIO monad based HTTP request/response processing"
 )
 
@@ -21,7 +21,7 @@
 ;;           WebIOtFailed
 ;;
 
-(defn wrap-request 
+(defn wrap-request
   "Wrapper around return that builds the new request monad initializing it
    with the values of the rack-request"
   {:monad :WebIO}

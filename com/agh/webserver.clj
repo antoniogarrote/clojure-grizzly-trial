@@ -1,4 +1,5 @@
-(clojure/comment
+(comment
+  "Main entry point for the server"
 )
 
 (ns com.agh.webserver)
