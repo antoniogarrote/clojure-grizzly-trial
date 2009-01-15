@@ -17,6 +17,8 @@ public class ClojureSelectorThread extends SelectorThread {
             "clojure.numberOfRuntime";
 
     protected String clojureRoot;
+    protected String clojurePublicPath;
+
     private int numberOfRuntime = 5;
     private int maxRt = -1; //defaults to 2
     private int minRt = -1; //defaults to 1
@@ -25,6 +27,14 @@ public class ClojureSelectorThread extends SelectorThread {
         return clojureRoot;
     }
 
+    public void setClojurePublicPath(String path) {
+        this.clojurePublicPath = path;
+    }
+
+    public String getClojurePublicPath() {
+        return this.clojurePublicPath;
+    }
+    
     @Override
     public void initEndpoint() throws IOException, InstantiationException {
         System.out.println("ClojureSelectorThread::initEndpoint");
@@ -33,7 +43,7 @@ public class ClojureSelectorThread extends SelectorThread {
         ClojureRuntimeAsyncFilter asyncFilter = new ClojureRuntimeAsyncFilter();
         adapter = new ClojureAdapter(clojureRoot, numberOfRuntime, minRt, maxRt, asyncExecution, asyncFilter);
 
-        setWebAppRootPath(clojureRoot + "/public");
+        setWebAppRootPath(getClojurePublicPath());
         setBufferResponse(false);
 
         DefaultAsyncHandler asyncHandler = new DefaultAsyncHandler();

@@ -685,6 +685,79 @@
   ([kw]
      (str "?" (. (str kw) (substring 1 (. (str kw) (length)))))))
 
+;; Translates a RDF template into a RDF graph with a set of bindings
+(defmulti template-to-graph (fn [obj bindings] (rdf-meta obj)))
+
+(defmethod template-to-graph :uri-node [obj bindings]
+  "Transforms a uri-node from a template into a graph"
+  (let [translated-relations (map (fn [r] (template-to-graph r bindings)) (:relations obj))]
+    (build-uri-node obj translated-relations)))
+
+(defmethod template-to-graph :literal-node [obj bindings]
+  "Transforms a literal-node from a template into a graph"
+  obj)
+
+(defmethod template-to-graph :blank-node [obj bindings]
+  "Transforms a blank-node from a template into a graph"
+  (let [translated-relations (map (fn [r] (template-to-graph r bindings)) (:relations obj))]
+    (build-blank-node obj translated-relations)))
+
+(defmethod template-to-graph :relation [obj bindings]
+  "Transforms a relation from a template into a graph"
+  (let [translated-object (template-to-graph (:object obj) bindings)]
+    (build-relation (:value obj) translated-object)))
+
+(defmethod template-to-graph :variable-relation [obj bindings]
+  "Transforms a relation from a template into a graph"
+  (let [translated-object (template-to-graph (:object obj) bindings)
+        variable-identifier (:value (:value obj))
+        value-for-identifier (get bindings variable-identifier) ]
+    (if (nil? value-for-identifier)
+      (throw (Exception. (str "Unbounded variable for variable relation " variable-identifier)))
+      (build-relation value-for-identifier translated-object))))
+
+(defmethod template-to-graph :variable-node [obj bindings]
+  "Transforms a relation from a template into a graph"
+  (let [translated-relations (map (fn [r] (template-to-graph r bindings)) (:relations obj))
+        variable-identifier (:value (:value obj))
+        value-for-identifier (get bindings variable-identifier) ]
+    (if (nil? value-for-identifier)
+      (throw (Exception. (str "Unbounded variable for variable node " variable-identifier)))
+      (let [tag (rdf-meta value-for-identifier)]
+        (if (= tag :bnode-identifier)
+          (build-blank-node (:value (value-for-identifier)) translated-relations)
+        (if (= tag :uri)
+          (build-uri-node value-for-identifier translated-relations)
+        (if (= tag :literal)
+          (build-literal-node value-for-identifier)
+          (throw (Exception. (str "Unknown RDF graph metadata " tag))))))))))
+
+(defmethod template-to-graph :graph [obj bindings]
+  "Transforms a graph froma template into a graph"
+  (let [translated-nodes (map (fn [n] (template-to-graph n bindings)) (:nodes obj))]
+    (build-graph translated-nodes)))
+
+(defmethod template-to-graph :optional-graph [obj bindings]
+  "Transforms a optional graph template from a template into a graph"
+  (try
+   (template-to-graph obj bindings)
+   (catch Exception _ (build-graph [])))) ;; if exception found, that means a lack of the optional binding
+                                          ;; so we return a graph without nodes
+
+(defmethod template-to-graph :graph-template [obj bindings]
+  "Transforms a graph template from a template into a graph"
+  (let [nodes-sets (reduce
+                    (fn [acum graph-filter-struct]
+                      (conj acum (:template graph-filter-struct)))
+                    []
+                    (:nodes-filters obj)) ]
+    (build-graph (reduce
+                  clojure.set/union
+                  []
+                  (map (fn [graph-from-template]
+                           (:nodes (template-to-graph graph-from-template bindings))) nodes-sets)))))
+
+
 (defn prepare-query-from-template
   ([args templates bindings]
      (let [sparql-args (str (reduce
@@ -857,78 +930,6 @@
                                      (make-array org.openrdf.sail.memory.model.MemURI 0)))
                (recur (rest triplets))))
            (. connection (commit)))))))
-
-;; Translates a RDF template into a RDF graph with a set of bindings
-(defmulti template-to-graph (fn [obj bindings] (rdf-meta obj)))
-
-(defmethod template-to-graph :uri-node [obj bindings]
-  "Transforms a uri-node from a template into a graph"
-  (let [translated-relations (map (fn [r] (template-to-graph r bindings)) (:relations obj))]
-    (build-uri-node obj translated-relations)))
-
-(defmethod template-to-graph :literal-node [obj bindings]
-  "Transforms a literal-node from a template into a graph"
-  obj)
-
-(defmethod template-to-graph :blank-node [obj bindings]
-  "Transforms a blank-node from a template into a graph"
-  (let [translated-relations (map (fn [r] (template-to-graph r bindings)) (:relations obj))]
-    (build-blank-node obj translated-relations)))
-
-(defmethod template-to-graph :relation [obj bindings]
-  "Transforms a relation from a template into a graph"
-  (let [translated-object (template-to-graph (:object obj) bindings)]
-    (build-relation (:value obj) translated-object)))
-
-(defmethod template-to-graph :variable-relation [obj bindings]
-  "Transforms a relation from a template into a graph"
-  (let [translated-object (template-to-graph (:object obj) bindings)
-        variable-identifier (:value (:value obj))
-        value-for-identifier (get bindings variable-identifier) ]
-    (if (nil? value-for-identifier)
-      (throw (Exception. (str "Unbounded variable for variable relation " variable-identifier)))
-      (build-relation value-for-identifier translated-object))))
-
-(defmethod template-to-graph :variable-node [obj bindings]
-  "Transforms a relation from a template into a graph"
-  (let [translated-relations (map (fn [r] (template-to-graph r bindings)) (:relations obj))
-        variable-identifier (:value (:value obj))
-        value-for-identifier (get bindings variable-identifier) ]
-    (if (nil? value-for-identifier)
-      (throw (Exception. (str "Unbounded variable for variable node " variable-identifier)))
-      (let [tag (rdf-meta value-for-identifier)]
-        (if (= tag :bnode-identifier)
-          (build-blank-node (:value (value-for-identifier)) translated-relations)
-        (if (= tag :uri)
-          (build-uri-node value-for-identifier translated-relations)
-        (if (= tag :literal)
-          (build-literal-node value-for-identifier)
-          (throw (Exception. (str "Unknown RDF graph metadata " tag))))))))))
-
-(defmethod template-to-graph :graph [obj bindings]
-  "Transforms a graph froma template into a graph"
-  (let [translated-nodes (map (fn [n] (template-to-graph n bindings)) (:nodes obj))]
-    (build-graph translated-nodes)))
-
-(defmethod template-to-graph :optional-graph [obj bindings]
-  "Transforms a optional graph template from a template into a graph"
-  (try
-   (template-to-graph obj bindings)
-   (catch Exception _ (build-graph [])))) ;; if exception found, that means a lack of the optional binding
-                                          ;; so we return a graph without nodes
-
-(defmethod template-to-graph :graph-template [obj bindings]
-  "Transforms a graph template from a template into a graph"
-  (let [nodes-sets (reduce
-                    (fn [acum graph-filter-struct]
-                      (conj acum (:template graph-filter-struct)))
-                    []
-                    (:nodes-filters obj)) ]
-    (build-graph (reduce
-                  clojure.set/union
-                  []
-                  (map (fn [graph-from-template]
-                           (:nodes (template-to-graph graph-from-template bindings))) nodes-sets)))))
 
 ;; Several multimethods that parses data into the propper RDF objects
 ;; meaning something valid with :rdf meatadata

@@ -16,17 +16,19 @@
     (use :reload 'com.agh.monads.webio)
     (use :reload 'com.agh.utils)
     (use :reload 'com.agh.webserver.framework.logger)
+    (use :reload 'com.agh.webserver.rack)
     (use :reload 'com.agh.webserver.framework.router)
     (use :reload 'com.agh.webserver.framework.persistence.rdf)
     (use :reload 'com.agh.webserver.framework.persistence.rdf.vocabularies.xsd)
     (use :reload 'com.agh.webserver.framework.persistence.rdf.vocabularies.rdfs)
     (use :reload 'com.agh.webserver.framework.persistence.rdf.vocabularies.owl)
+    (use :reload 'com.agh.webserver.framework.dataformats)
+    (use :reload 'com.agh.webserver.framework.dataformats.json)
     (use :reload 'com.agh.webserver.rack)))
 
-(use :reload 'com.agh.webserver.rack)
 
-(defn rack-invokation-point [req function]
-  (with-rack-response req function))
+;;(defn rack-invokation-point [req function]
+;;  (with-rack-response req function))
 
 
 (defn run-and-log-to

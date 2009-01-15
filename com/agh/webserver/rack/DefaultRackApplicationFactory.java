@@ -8,6 +8,7 @@ import clojure.lang.AMapEntry;
 import clojure.lang.Keyword;
 import clojure.lang.LazyCons;
 import clojure.lang.MapEntry;
+import clojure.lang.PersistentArrayMap;
 import clojure.lang.PersistentHashMap;
 import clojure.lang.PersistentStructMap;
 import clojure.lang.RT;
@@ -47,7 +48,7 @@ public class DefaultRackApplicationFactory implements RackApplicationFactory{
     public DefaultRackApplicationFactory(ClojureAdapter adapter) {
         this.logger = adapter.getLogger();
         this.appRoot = adapter.getAppRoot();
-        this.adapter = adapter;
+        this.adapter = adapter;        
     }
 
     public RackApplication newApplication(final RT runtime) throws RackInitializationException {
@@ -80,24 +81,25 @@ public class DefaultRackApplicationFactory implements RackApplicationFactory{
 
                 File script = new File(filePath+".clj");
 
-                if(script.exists()) {
+                //if(script.exists()) {
                     try {
                         Properties props = System.getProperties();
-                        RT.loadResourceScript(suffix+".clj");
-                        RT.loadResourceScript(CLOJURE_RACK);
+                        //RT.loadResourceScript(suffix+".clj");
+                        //RT.loadResourceScript(CLOJURE_RACK);
                         //Object[] args = new Object[2];
                         //args[0] = rackEnv;
                         //args[1] = path[path.length-1];
                         //Var form = RT.var("com.agh.webserver.rack", "with-rack-response");
                         Var form = RT.var("com.agh.webserver.rack", "rack-invokation-point");
                         //PersistentStructMap result = (PersistentStructMap) form.invoke(rackEnv, "hello-complex");
-                        PersistentStructMap result = (PersistentStructMap) form.invoke(rackEnv,path[path.length-1]);
+                        PersistentArrayMap result = (PersistentArrayMap) form.invoke(rackEnv,path[path.length-1]);
 
                         Integer theStatus = null;
                         String theBody = null;
                         HashMap theHeaders = null;
 
-                        Object[] results = result.toArray();
+                        //Object[] results = result.toArray();
+                        Object[] results = result.values().toArray();
                         for(Object entry : results) {
                             MapEntry e = (MapEntry) entry;
                             Keyword key = (Keyword) e.getKey();
@@ -108,7 +110,8 @@ public class DefaultRackApplicationFactory implements RackApplicationFactory{
                                 theStatus = (Integer) val;
                             }else if(keyString == "headers") {
                                 PersistentHashMap headersStruct = (PersistentHashMap) val;
-                                Object[] everyHeader = headersStruct.toArray();
+                                //Object[] everyHeader = headersStruct.toArray();
+                                Object[] everyHeader = headersStruct.values().toArray();
                                 Iterator it = headersStruct.iterator();
                                 while(it.hasNext()) {
                                     AMapEntry he = (AMapEntry) it.next();
@@ -186,7 +189,7 @@ public class DefaultRackApplicationFactory implements RackApplicationFactory{
                         };
                     }                    
 
-                } else {
+/*                } else {
 
                     resp = new RackResponse() {
 
@@ -212,7 +215,7 @@ public class DefaultRackApplicationFactory implements RackApplicationFactory{
                         }
                     };
                 }
-
+*/
                 return resp;
             }
         };

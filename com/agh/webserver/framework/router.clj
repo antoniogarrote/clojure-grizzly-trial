@@ -28,8 +28,17 @@
 (defn tokenize-request-path
   "Translates a request URL minus the params into a sequence of tokens"
   ([request-path]
-     (filter #(not= % "") (. request-path split "/"))))
-
+     (loop [parts (filter #(not= % "") (. request-path split "/"))
+            acum []]
+       (if (nil? parts)
+         acum
+         (let [this-part (first parts)]
+           (if (not (= -1 (. this-part (indexOf "."))))
+             (let [splt-part (. this-part (split "\\."))]
+               (recur (rest parts)
+                      (conj (conj acum (first splt-part)) (second splt-part))))
+             (recur (rest parts)
+                    (conj acum this-part))))))))
 
 (defn extract-request-method
   "Parses the REQUEST_METHOD Rack environment variable and returns the
@@ -44,10 +53,39 @@
   ([rack-env]
      (let [keys (keys rack-env)]
        (reduce
-        (fn [ac i] (conj { (keyword (. i toLowerCase)) (. rack-env (get i))} ac))
+        (fn [ac i] (conj { (keyword (. i toLowerCase)) (get rack-env i)} ac))
         {}
         keys))))
 
+
+;; Parser tokens building functions
+
+(defn build-http-method-tokens
+  "Obtains a http-method token from the rack environment"
+  ([rack-env]
+     {:type :http-method :value (extract-request-method rack-env)}))
+
+(defn build-url-parts-tokens
+  "Transforms the PATH_TRANSLATED environment property into a list of url parts"
+  ([rack-env]
+     (let [ parts (tokenize-request-path (get rack-env "PATH_TRANSLATED")) ]
+       (map (fn [part] {:type :url-part :value part}) parts))))
+
+(defn build-parameters-query-tokens
+  "parses the parameters of the request query into a map of items"
+  ([rack-env]
+     (let [params-map (parse-request-params (get rack-env "QUERY_STRING"))]
+       {:type :url-parameters
+        :value (reduce-maps-list (map (fn [key] {key (key params-map)}) (keys params-map)))})))
+
+(defn tokenize-rack-request
+  "Parses a rack request and builds a list of tokens suitable to be checked
+   against a route pattern"
+  ([rack-env]
+     (let [ m (trace (str "METHOD " (list (build-http-method-tokens rack-env))) (list (build-http-method-tokens rack-env)))
+            p (trace (str "PARTS " (build-url-parts-tokens rack-env))(build-url-parts-tokens rack-env))
+            q (trace (str "PARAMS " (list (build-parameters-query-tokens rack-env))) (list (build-parameters-query-tokens rack-env))) ]
+       (concat m p q))))
 
 ;; Route parser
 
@@ -314,6 +352,35 @@
           tmp
           (recur (rest combinators) (>>= (first combinators) tmp)))))))
 
+;; routing table
+
+(defstruct router-entry
+  :pattern ;; a route template to match against the rack requests
+  :handler ;; that function that will handle the request if the template matches the rack request
+  :before-filters ;; a list of filters to be applied sequentially before the request can be passed to the handler
+  :after-filters ;; a list of filters to be applied sequentially after the request has been passed to the handler
+)
+
+(def *router-table* (ref []))
+
+(defmacro url-pattern [& tokens]
+  `(quote [ ~@tokens ]))
+
+(defn route
+  "Add a route to the router table"
+  ([pattern handler]
+     (dosync
+      (commute *router-table*
+               (fn [table pattern handler]
+                 (conj table
+                       (struct router-entry
+                               pattern
+                               handler
+                               []
+                               [])))
+               pattern handler))))
+
+
 (comment
   "Tests"
 )
@@ -328,6 +395,68 @@
       (if (not (nil? pairs))
           (recur (first pairs) (rest pairs))))
     r))
+
+(defn test-rack-request-router
+  ([]
+     { "HTTP_USER_AGENT" "Mozilla/5.0 (Macintosh; U; Intel Mac OS X 10.5; es-ES; rv:1.9.0.5) Gecko/2008120121 Firefox/3.0.5 XPCOMViewer/1.0a1"
+       "PATH_TRANSLATED" "/dasfdasdf.php"
+       "CONTENT_TYPE" ""
+       "HTTP_ACCEPT_LANGUAGE" "es-es,es;q=0.8,en-us;q=0.5,en;q=0.3"
+       "rack.input" "java.nio.channels.Channels$ReadableByteChannelImpl@6761424d"
+       "clojure.output.headers" {}
+       "HTTP_ACCEPT" "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+       "HTTP_KEEP_ALIVE" "300"
+       "HTTP_ACCEPT_ENCODING" "gzip,deflate"
+       "SERVER_NAME" ""
+       "rack.errors" "java.util.logging.Logger@22480241"
+       "REQUEST_METHOD" "GET"
+       "SERVER_PORT" "8880"
+       "SCRIPT_NAME" ""
+       "rack.multithread" true
+       "REMOTE_ADDR" ""
+       "rack.multiprocess" false
+       "REMOTE_HOST" ""
+       "HTTP_ACCEPT_CHARSET" "ISO-8859-1,utf-8;q=0.7,*;q=0.7"
+       "HTTP_CONNECTION" "keep-alive"
+       "HTTP_HOST" "localhost:8880"
+       "REMOTE_USER" ""
+       "PATH_INFO" "/dasfdasdf.php"
+       "QUERY_STRING" "a=1&b=2&c=3"
+       "clojure.output.stream" ""
+       "rack.version" "0.1"
+       "clojure.output.status" "200"
+       "rack.url_scheme" "" }))
+
+(defn test-rack-request-router-with-path
+  ([path]
+     { "HTTP_USER_AGENT" "Mozilla/5.0 (Macintosh; U; Intel Mac OS X 10.5; es-ES; rv:1.9.0.5) Gecko/2008120121 Firefox/3.0.5 XPCOMViewer/1.0a1"
+       "PATH_TRANSLATED" path
+       "CONTENT_TYPE" ""
+       "HTTP_ACCEPT_LANGUAGE" "es-es,es;q=0.8,en-us;q=0.5,en;q=0.3"
+       "rack.input" "java.nio.channels.Channels$ReadableByteChannelImpl@6761424d"
+       "clojure.output.headers" {}
+       "HTTP_ACCEPT" "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+       "HTTP_KEEP_ALIVE" "300"
+       "HTTP_ACCEPT_ENCODING" "gzip,deflate"
+       "SERVER_NAME" ""
+       "rack.errors" "java.util.logging.Logger@22480241"
+       "REQUEST_METHOD" "GET"
+       "SERVER_PORT" "8880"
+       "SCRIPT_NAME" ""
+       "rack.multithread" true
+       "REMOTE_ADDR" ""
+       "rack.multiprocess" false
+       "REMOTE_HOST" ""
+       "HTTP_ACCEPT_CHARSET" "ISO-8859-1,utf-8;q=0.7,*;q=0.7"
+       "HTTP_CONNECTION" "keep-alive"
+       "HTTP_HOST" "localhost:8880"
+       "REMOTE_USER" ""
+       "PATH_INFO" path
+       "QUERY_STRING" "a=1&b=2&c=3"
+       "clojure.output.stream" ""
+       "rack.version" "0.1"
+       "clojure.output.status" "200"
+       "rack.url_scheme" "" }))
 
 (deftest test-extract-request-method
   (is (=
@@ -611,3 +740,42 @@
   (is (=
        (check-route '[(|| GET POST) "google" (&& "es" :lang) (params :test_b)] (list (mock-request-http-tokens-with-params :get '("google" "es") '((:test 1) (:b 2))) {}))
        '{:monad-type :Maybe, :monad-subtype :Nothing, :content nil})))
+
+(deftest test-rehash-environment-1
+  (is (=
+       (rehash-rack-env (test-rack-request-router))
+       {:request_method "GET", :http_host "localhost:8880", :http_accept_language "es-es,es;q=0.8,en-us;q=0.5,en;q=0.3", :rack.multithread true, :http_accept "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", :remote_user "", :server_port "8880", :remote_addr "", :rack.url_scheme "", :remote_host "", :http_connection "keep-alive", :path_info "/dasfdasdf.php", :script_name "", :query_string "a=1&b=2&c=3", :rack.multiprocess false, :clojure.output.headers {}, :clojure.output.status "200", :http_accept_encoding "gzip,deflate", :content_type "", :rack.errors "java.util.logging.Logger@22480241", :http_user_agent "Mozilla/5.0 (Macintosh; U; Intel Mac OS X 10.5; es-ES; rv:1.9.0.5) Gecko/2008120121 Firefox/3.0.5 XPCOMViewer/1.0a1", :http_keep_alive "300", :clojure.output.stream "", :path_translated "/dasfdasdf.php", :http_accept_charset "ISO-8859-1,utf-8;q=0.7,*;q=0.7", :rack.version "0.1", :rack.input "java.nio.channels.Channels$ReadableByteChannelImpl@6761424d", :server_name ""})))
+
+(deftest test-route-1
+  (is (=
+       (route
+        (url-pattern GET "google" "com")
+        identity)
+       [{ :pattern '[GET "google" "com"] :handler identity :before-filters [] :after-filters [] }])))
+
+(deftest test-build-http-method-token-1
+  (is (= (build-http-method-tokens (test-rack-request-router))
+         {:type :http-method :value :get})))
+
+(deftest test-build-url-parts-tokens
+  (is (= (build-url-parts-tokens (test-rack-request-router-with-path "/path/to/request.php"))
+         [{:value "path", :type :url-part}
+          {:value "to", :type :url-part}
+          {:value "request", :type :url-part}
+          {:value "php", :type :url-part}])))
+
+(deftest test-build-parameters-query-tokens
+  (is (= (build-parameters-query-tokens (test-rack-request-router))
+         {:value {:c "3", :a "1", :b "2"}, :type :url-parameters})))
+
+(deftest tokenize-rack-request
+  (let [ result (tokenize-rack-request (test-rack-request-router)) ]
+    (do
+      (is (= (set result)
+             (set '({:type :http-method, :value :get} {:type :url-part, :value "dasfdasdf"} {:type :url-part, :value "php"} {:type :url-parameters, :value {:b "2", :c "3",:a "1"}}))))
+      (is (= (nth result 0)
+             '{:type :http-method, :value :get}))
+      (is (= (nth result 1)
+             '{:type :url-part, :value "dasfdasdf"}))
+      (is (= (nth result 2)
+             '{:type :url-part, :value "php"})))))

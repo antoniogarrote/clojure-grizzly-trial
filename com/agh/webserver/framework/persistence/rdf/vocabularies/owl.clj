@@ -640,6 +640,30 @@
   :created ;; true if the individual has been created and has not been saved yet
 )
 
+
+(defn owl-individual?
+  "Checks if an object is an ABox individual"
+  ([object] (= (rdf-meta object) :owl-individual)))
+
+(defn owl-individual-to-properties-map
+  "Returns a map with the properties of an individual"
+  ([individual]
+     (let [properties (:properties-value-map individual)
+           base-map (reduce-maps-list
+                     (map (fn [key]
+                            (let [key-name (let [to-return (tbox-find-name-for-uri key)]
+                                             (if (nil? to-return) key to-return))]
+                              (let [the-obj (get properties key)]
+                                (if (nil? the-obj)
+                                  {}
+                                  (if (tbox-datatype-property? key)
+                                    {key-name (:value the-obj)}
+                                    (if (owl-individual? the-obj)
+                                      {key-name (owl-individual-to-properties-map the-obj)}
+                                      {key-name {:uri (uri-to-string the-obj) :tag :owl-individual}}))))))
+                          (keys properties)))]
+       (merge base-map {:tag :owl-individual :uri (uri-to-string (:uri individual))}))))
+
 (defn gen-id
   "Generates an unique identifier"
   ([] (.. java.util.UUID (randomUUID) (toString))))

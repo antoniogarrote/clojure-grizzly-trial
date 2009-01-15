@@ -2,9 +2,15 @@ package com.agh.webserver;
         
 import clojure.lang.RT;
 import com.sun.grizzly.tcp.StaticResourcesAdapter;
+import java.io.File;
 import java.io.IOException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import org.apache.commons.cli.CommandLine;
+import org.apache.commons.cli.Options;
+import org.apache.commons.cli.ParseException;
+import org.apache.commons.cli.Parser;
+import org.apache.commons.cli.PosixParser;
 /*
 import org.openrdf.repository.Repository;
 import org.openrdf.repository.RepositoryException;
@@ -42,19 +48,54 @@ public class Main {
             e.printStackTrace();
         }
 */
-
-        ClojureSelectorThread selectorThread = new ClojureSelectorThread();
-        selectorThread.setClojureRoot("/Users/antonio/Desktop/clj-web-app/");
-        selectorThread.setPort(8080);
-        selectorThread.setAdapter(new ClojureAdapter("/", 3, 1, 5, true, new ClojureRuntimeAsyncFilter()));
         try {
+            CommandLine cmd = commandLineOptions(args);
+            
+            ClojureRTWrapper.loadFramework();
+            
+            ClojureSelectorThread selectorThread = new ClojureSelectorThread();
+            selectorThread.setClojurePublicPath(serverRoot(cmd));
+            selectorThread.setClojureRoot(new File(".").getCanonicalPath());
+            selectorThread.setPort(serverPort(cmd));
+            selectorThread.setAdapter(new ClojureAdapter("/", 3, 1, 5, true, new ClojureRuntimeAsyncFilter()));
             selectorThread.initEndpoint();
             selectorThread.startEndpoint();
+            
         } catch (IOException ex) {
             System.out.println(ex.getMessage());
         } catch (InstantiationException ex) {
             System.out.println(ex.getMessage());
+        } catch (ParseException ex) {
+            System.out.println(ex.getMessage());
+        } catch (Exception ex) {
+            System.out.println("ABORTING!!!");
         }
 
+    }
+
+
+    private static final CommandLine commandLineOptions(String[] args) throws ParseException {
+        Options opts = new Options();
+        opts.addOption("p", false, "server port");
+        opts.addOption("P", "public", false, "public path");
+
+        return new PosixParser().parse(opts, args);
+    }
+
+    private static int serverPort(CommandLine cmd) {
+        if(cmd.hasOption("p")) {
+            return Integer.parseInt(cmd.getOptionValue("p"));
+        } else {
+            return 8880;
+        }
+    }
+
+    private static String serverRoot(CommandLine cmd) throws IOException {
+        if(cmd.hasOption("P")) {
+            return cmd.getOptionValue("p");
+        } else {
+            File current = new File("./public");
+            return current.getCanonicalPath();
+        }
     }
 } 

@@ -25,6 +25,12 @@
   "Returns the collection of entries holding a certain value"
   (map (fn [e] (first e)) (filter (fn [entry] (= (val entry) the-value)) the-map)))
 
+(defn reduce-maps-list [map-list]
+  "Fuses a list of hashes in a single hash"
+  (reduce
+   (fn [acum item] (merge acum item))
+   map-list))
+
 ;; lambda things
 
 (defmacro curry [func & args]

@@ -9,6 +9,7 @@
 (ns com.agh.webserver.rack)
 
 (use 'com.agh.utils)
+(use 'com.agh.webserver.framework.logger)
 
 (defstruct rack-response :status :headers :body)
 
@@ -157,7 +158,7 @@
 ;;      (merge (:headers @rack-response-ref) headers)
 ;;      (str (:body @rack-response-ref) body))))
 
-(defn render 
+(defn render
   "Renders a string in a Rack response setting up headers and a certain status
    code."
   ([rack-response-ref to-add status headers]
@@ -177,6 +178,21 @@
        @res#)))
 
 
+(defn rack-invokation-point
+  "Main entry point for a request to the framework"
+  ([rack-request path]
+    (do (log :info (str "Starting request with params \n " rack-request " , " path))
+        (log :info (str "KEYS -> \n" (keys rack-request)))
+        (loop [ks (keys rack-request)]
+          (if (not (nil? ks))
+            (do
+               (log :info (str " " (first ks) " -> " (class (get rack-request (first ks)))))
+               (recur (rest ks)))))
+        (+ 1 1)
+        (+ 2 1)
+      {:response "test"})))
+
+
 (defn test-update-rack-response []
   (let [response (ref (create-rack-response))]
       (render response "test" 201 {:Content-type "text/html"})))
@@ -190,6 +206,37 @@
 (defn test-serialize-rack-response
   [rack-response]
   (list (:status rack-response) (:headers rack-response) (. (:body rack-response) toString)))
+
+(defn test-rack-request
+  ([]
+     { "HTTP_USER_AGENT" "Mozilla/5.0 (Macintosh; U; Intel Mac OS X 10.5; es-ES; rv:1.9.0.5) Gecko/2008120121 Firefox/3.0.5 XPCOMViewer/1.0a1"
+       "PATH_TRANSLATED" "/dasfdasdf.php"
+       "CONTENT_TYPE" ""
+       "HTTP_ACCEPT_LANGUAGE" "es-es,es;q=0.8,en-us;q=0.5,en;q=0.3"
+       "rack.input" "java.nio.channels.Channels$ReadableByteChannelImpl@6761424d"
+       "clojure.output.headers" {}
+       "HTTP_ACCEPT" "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+       "HTTP_KEEP_ALIVE" "300"
+       "HTTP_ACCEPT_ENCODING" "gzip,deflate"
+       "SERVER_NAME" ""
+       "rack.errors" "java.util.logging.Logger@22480241"
+       "REQUEST_METHOD" "GET"
+       "SERVER_PORT" "8880"
+       "SCRIPT_NAME" ""
+       "rack.multithread" true
+       "REMOTE_ADDR" ""
+       "rack.multiprocess" false
+       "REMOTE_HOST" ""
+       "HTTP_ACCEPT_CHARSET" "ISO-8859-1,utf-8;q=0.7,*;q=0.7"
+       "HTTP_CONNECTION" "keep-alive"
+       "HTTP_HOST" "localhost:8880"
+       "REMOTE_USER" ""
+       "PATH_INFO" "/dasfdasdf.php"
+       "QUERY_STRING" "a=1&b=2&c=3"
+       "clojure.output.stream" ""
+       "rack.version" "0.1"
+       "clojure.output.status" "200"
+       "rack.url_scheme" "" }))
 
 ;; headers wrappers
 (deftest test-update-rack-response-header-func
