@@ -32,6 +32,18 @@
   ([m] (:content m)))
 
 
+(defn monad-type
+  "Returns the type of the monad"
+  ([monad] (:monad-type monad)))
+
+(defn monad-subtype
+  "Returns the subtype of the monad"
+  ([monad] (:monad-subtype monad)))
+
+(defn monad?
+  "Checks if the object is a monad"
+  ([object] (not (nil? (:monad (meta object))))))
+
 (defmacro do->>=
 
   "Alternative notation for threading monadic functions similar to Haskell's

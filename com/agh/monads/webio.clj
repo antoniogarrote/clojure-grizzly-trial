@@ -3,17 +3,19 @@
 )
 
 ;;
-;; @ Antonio Garrote Hernández
+;; @ Antonio Garrote Hernandez
 ;;
 
 (ns com.agh.monads.webio
  (:use com.agh.monads)
- (:use com.agh.webserver.rack))
+ (:use com.agh.webserver.rack)
+ (:use com.agh.utils))
 
 
-(defstruct web-request-processing :environment ;; The Rack request environment
+(defstruct web-request-processing :environment ;; The Rack request
                                   :response ;; The response of the request
-                                  :state) ;; Temporary state of the request
+                                  :parameters) ;; the parameters hash
+
 
 ;;
 ;; WebIO X = WebIOUnfished X |
@@ -25,75 +27,42 @@
   "Wrapper around return that builds the new request monad initializing it
    with the values of the rack-request"
   {:monad :WebIO}
-  ([rack-request]
-    (return :WebIO :Unfinished
+  ([rack-request rack-response parameters subtype]
+     (return :WebIO subtype
            (struct web-request-processing
-                  rack-request
-                  (create-rack-response)
-                  {}))))
+                   rack-request
+                   (if (= (class rack-response) clojure.lang.Ref)
+                     rack-response
+                     (ref rack-response))
+                   parameters)))
+  ([rack-request]
+    (wrap-request rack-request (create-rack-response) {} :Unfinished))
+  ([rack-request rack-response]
+    (wrap-request rack-request rack-response {} :Unfinished))
+  ([rack-request rack-response parameters]
+    (wrap-request rack-request rack-response parameters :Unfinished)))
 
+
+(defn web-io-monad?
+  "Checks if the given object is a web-io monad"
+  ([object] (and (monad? object)
+                 (= (monad-type object)
+                    :WebIO))))
+
+(defn web-io-failed?
+  ([web-io-monad]
+     (= (monad-subtype web-io-monad)
+        :Failed)))
 
 (comment
-
-(raise [web-request status msg]
-  "Wrapper around return that returns a new RequestUnfinished transformation
-   of a RequestUnfinished | RequestFinished monad, preserving its information.
-   Only the status and the response are modified"
-  (return :WebIO :Failed
-    (do (assoc))))
+  "Tests"
 )
-
-
-;; Request headers
-
-(defn request-header?
-  "Checks if a given header is present in the HTTP request"
-  ([web-request header]
-    (let [header (. header toUpperCase)
-          environment (:environment web-request)]
-      (not (nil? (get environment header))))))
-
-(defn get-request-header
-  "retrieves the content of a header from the request"
-    ([web-request header]
-    (let [header (. header toUpperCase)
-          environment (get web-request :environment)]
-      (header environment))))
-
-
 
 (use 'clojure.contrib.test-is)
 
-(defn mock-request
-  ([environment]
-    (struct web-request-processing
-      environment
-      (create-rack-response)
-      {})))
-
-(deftest test-request-header-right?
-  (is (=
-        (request-header?
-          (mock-request {"TEST" :ok})
-          "TEST")
-        true)))
-
-(deftest test-request-header-right-lowcase?
-  (is (=
-        (request-header?
-          (mock-request {"TEST" :ok})
-          "TEst")
-        true)))
-
-(deftest test-request-header-wrong?
-  (is (=
-        (request-header?
-          (mock-request {"TEST" :ok})
-          "TEST-erroreus")
-        false)))
-
 (deftest test-webio-wrapping
-  (is (=
-        (str (wrap-request {:test 1}))
-        (str (struct Monad :WebIO :Unfinished
-                  (struct web-request-processing {:test 1} (create-rack-response) {}))))))
+  (let [request (wrap-request {:test 1})
+        ref (:response (:content request))]
+    (is (=
+         (str request)
+         (str "{:monad-type :WebIO, :monad-subtype :Unfinished, :content {:environment {:test 1}, :response #<Ref " ref ">, :parameters {}}}")))))

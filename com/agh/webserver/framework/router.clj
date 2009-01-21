@@ -366,7 +366,7 @@
 (defmacro url-pattern [& tokens]
   `(quote [ ~@tokens ]))
 
-(defn route
+(defn route!
   "Add a route to the router table"
   ([pattern handler]
      (dosync
@@ -380,6 +380,21 @@
                                [])))
                pattern handler))))
 
+
+(defn check-route-for-rack-request
+  "Checks if there is a handler defined for the rack-request"
+  ([rack-request environment]
+     (let [tokens (tokenize-rack-request rack-request)
+           route-and-env (list tokens environment)]
+       (dosync
+        (loop [routes @*router-table*]
+          (if (nil? routes)
+            nil
+            (let [entry (first routes)
+                  result (check-route (:pattern entry) route-and-env)]
+              (if (nothing? result)
+                (recur (rest routes))
+                {:parse-result result :routed entry}))))))))
 
 (comment
   "Tests"
@@ -748,7 +763,7 @@
 
 (deftest test-route-1
   (is (=
-       (route
+       (route!
         (url-pattern GET "google" "com")
         identity)
        [{ :pattern '[GET "google" "com"] :handler identity :before-filters [] :after-filters [] }])))
@@ -779,3 +794,19 @@
              '{:type :url-part, :value "dasfdasdf"}))
       (is (= (nth result 2)
              '{:type :url-part, :value "php"})))))
+
+
+(defn test-clear-routes-table!
+  ([] (dosync
+       (commute *router-table*
+                (fn [table]
+                  [])))))
+
+
+(deftest test-check-route-for-rack-request-1
+  (do (test-clear-routes-table!)
+      (route! (url-pattern GET "dasfdasdf" "php") identity)
+        (is (= (:parse-result (check-route-for-rack-request (test-rack-request-router) {}))
+               '{:monad-type :Maybe
+                 :monad-subtype :Just
+                 :content (({:value {:c "3", :b "2", :a "1"}, :type :url-parameters}) {})}))))

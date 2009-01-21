@@ -158,13 +158,6 @@
 ;;      (merge (:headers @rack-response-ref) headers)
 ;;      (str (:body @rack-response-ref) body))))
 
-(defn render
-  "Renders a string in a Rack response setting up headers and a certain status
-   code."
-  ([rack-response-ref to-add status headers]
-    (dosync
-      (ref-set rack-response-ref (update-rack-response @rack-response-ref to-add status headers)))))
-
 
 (defmacro with-rack-response
   "Embeds a call to a function with a Rack request and response arguments. The
@@ -191,11 +184,6 @@
         (+ 1 1)
         (+ 2 1)
       {:response "test"})))
-
-
-(defn test-update-rack-response []
-  (let [response (ref (create-rack-response))]
-      (render response "test" 201 {:Content-type "text/html"})))
 
 ;;
 ;; tests

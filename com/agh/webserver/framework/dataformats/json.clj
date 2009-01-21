@@ -92,7 +92,19 @@
               the-individual (abox-build-individual-from-uri!
                                  (first result)
                                  (connection! :test))]
-            (is (= (data-format :json
-                                the-individual
-                                "")
-                   (str "{\"tag\":\"owl-individual\",\"uri\":\"" (uri-to-string (:uri the-individual))"\",\"prop_c\":\"35\"}")))))))
+          (do
+            (is (not (= (. (data-format :json
+                                        the-individual
+                                        "")
+                           (indexOf  "prop_c"))
+                        -1)))
+            (is (not (= (. (data-format :json
+                                        the-individual
+                                        "")
+                           (indexOf  "35"))
+                        -1)))
+            (is (not (= (. (data-format :json
+                                        the-individual
+                                        "")
+                           (indexOf  (uri-to-string (:uri the-individual))))
+                        -1))))))))
