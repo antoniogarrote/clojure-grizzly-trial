@@ -54,6 +54,27 @@
      (= (monad-subtype web-io-monad)
         :Failed)))
 
+(defn web-io-finished?
+  ([web-io-monad]
+     (= (monad-subtype web-io-monad)
+        :Finished)))
+
+(defn web-io-unfinished?
+  ([web-io-monad]
+     (= (monad-subtype web-io-monad)
+        :Unfinished)))
+
+(defmethod >>= :WebIO [f m]
+  "Instance of the >>= function for the WebIO monad. If the computation
+   result of m is WebIO Unfinished, the next function f is applied to the
+   content of the m. If the result of m is WebIO Failed, next function
+   f is not applied and m is returned. If the result of m is WebIO
+   Finished, f is not invoked"
+  (if (or (web-io-failed? m) (web-io-finished? m))
+    m
+    (f (:content m))))
+
+
 (comment
   "Tests"
 )
@@ -66,3 +87,18 @@
     (is (=
          (str request)
          (str "{:monad-type :WebIO, :monad-subtype :Unfinished, :content {:environment {:test 1}, :response #<Ref " ref ">, :parameters {}}}")))))
+
+(deftest test-web-io-failed-1
+  (is (=
+       (web-io-failed? (wrap-request "test" "test" "test" :Failed))
+       true)))
+
+(deftest test-web-io-finished-1
+  (is (=
+       (web-io-finished? (wrap-request "test" "test" "test" :Finished))
+       true)))
+
+(deftest test-web-io-unfinished-1
+  (is (=
+       (web-io-unfinished? (wrap-request "test" "test" "test" :Unfinished))
+       true)))

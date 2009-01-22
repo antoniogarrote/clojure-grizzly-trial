@@ -397,6 +397,29 @@
                 {:parse-result result :routed entry}))))))))
 
 (comment
+
+(defn main-server-handler
+  "Main handler for requests in the server"
+  ([rack-request]
+     (let [routing-result (try
+                           (check-route-for-rack-request rack-request {})
+                            (catch Exception ex (nothing))) ]
+       (if (nothing? routing-result)
+         (trace "NOHTING ROUTING ERROR" "")
+         (let [parameters (second (:content (:parse-result routing-result)))
+               request (rehash-rack-env rack-request)
+               io-monad (wrap-request request (create-rack-response) parameters)
+               routing-entry (:routed routing-result)
+               functions (concat (:before-filters routing-entry)
+                                 (list (:handler routing-entry))
+                                 (:after-filters routing-entry))]
+)))))
+
+)
+
+
+
+(comment
   "Tests"
 )
 
