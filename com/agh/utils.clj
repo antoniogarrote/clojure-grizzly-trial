@@ -31,6 +31,19 @@
    (fn [acum item] (merge acum item))
    map-list))
 
+
+(defn assoc-map-to-hash-map
+  ([assoc-map]
+     (let [to-return (new java.util.HashMap)]
+       (do (loop [to-put (keys assoc-map)]
+             (when (not (nil? to-put))
+               (let [this-key (first to-put)
+                     other-keys (rest to-put)]
+                 (do
+                   (. to-return (put (keyword-to-string this-key) (get assoc-map this-key)))
+                   (recur other-keys)))))
+           to-return))))
+
 ;; lambda things
 
 (defmacro curry [func & args]

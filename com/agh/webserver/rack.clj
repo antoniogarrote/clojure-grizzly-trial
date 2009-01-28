@@ -49,7 +49,7 @@
 
   ([body status rack-response]
     (create-rack-response
-      status
+     (if (= (class status) String) (. Integer (parseInt status)) status)
       (:headers rack-response)
       (update-rack-response-body body rack-response)))
 
@@ -72,17 +72,17 @@
           (not (= status nil))
           (= headers nil))
       (create-rack-response
-        status
-        (:headers rack-response)
-        (:body rack-response))
+       (if (= (class status) String) (. Integer (parseInt status)) status)
+       (:headers rack-response)
+       (:body rack-response))
     (if (and
-          (not (= body nil))
-          (not (= status nil))
-          (= headers nil))
+         (not (= body nil))
+         (not (= status nil))
+         (= headers nil))
       (create-rack-response
-        status
-        (:headers rack-response)
-        (update-rack-response-body body rack-response))
+       (if (= (class status) String) (. Integer (parseInt status)) status)
+       (:headers rack-response)
+       (update-rack-response-body body rack-response))
     (if (and
           (= body nil)
           (= status nil)
@@ -104,17 +104,17 @@
           (not (= status nil))
           (not (= headers nil)))
       (create-rack-response
-        status
-        (:headers rack-response)
-        (update-rack-response-body body rack-response))
+       (if (= (class status) String) (. Integer (parseInt status)) status)
+       (:headers rack-response)
+       (update-rack-response-body body rack-response))
     (if (and
           (not (= body nil))
           (not (= status nil))
           (not (= headers nil)))
       (create-rack-response
-        status
-        (merge (:headers rack-response) headers)
-        (update-rack-response-body body rack-response))))))))))))
+       (if (= (class status) String) (. Integer (parseInt status)) status)
+       (merge (:headers rack-response) headers)
+       (update-rack-response-body body rack-response))))))))))))
 
 
 ;; wrapper functions
@@ -171,19 +171,19 @@
        @res#)))
 
 
-(defn rack-invokation-point
-  "Main entry point for a request to the framework"
-  ([rack-request path]
-    (do (log :info (str "Starting request with params \n " rack-request " , " path))
-        (log :info (str "KEYS -> \n" (keys rack-request)))
-        (loop [ks (keys rack-request)]
-          (if (not (nil? ks))
-            (do
-               (log :info (str " " (first ks) " -> " (class (get rack-request (first ks)))))
-               (recur (rest ks)))))
-        (+ 1 1)
-        (+ 2 1)
-      {:response "test"})))
+;;(defn rack-invokation-point
+;;  "Main entry point for a request to the framework"
+;  ([rack-request path]
+;    (do (log :info (str "Starting request with params \n " rack-request " , " path))
+;        (log :info (str "KEYS -> \n" (keys rack-request)))
+;        (loop [ks (keys rack-request)]
+;          (if (not (nil? ks))
+;            (do
+;               (log :info (str " " (first ks) " -> " (class (get rack-request (first ks)))))
+;               (recur (rest ks)))))
+;        (+ 1 1)
+;        (+ 2 1)
+;      {:response "test"})))
 
 ;;
 ;; tests

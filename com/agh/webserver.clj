@@ -15,6 +15,7 @@
     (use :reload 'com.agh.monads.state)
     (use :reload 'com.agh.monads.webio)
     (use :reload 'com.agh.utils)
+    (use :reload 'com.agh.cljhaml)
     (use :reload 'com.agh.webserver.framework)
     (use :reload 'com.agh.webserver.framework.logger)
     (use :reload 'com.agh.webserver.rack)

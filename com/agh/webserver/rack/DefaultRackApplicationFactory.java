@@ -23,6 +23,7 @@ import com.sun.grizzly.tcp.http11.GrizzlyResponse;
 import java.io.File;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -79,25 +80,21 @@ public class DefaultRackApplicationFactory implements RackApplicationFactory{
                     }
                 }
 
-                File script = new File(filePath+".clj");
+                try {
+                    Properties props = System.getProperties();
 
-                //if(script.exists()) {
-                    try {
-                        Properties props = System.getProperties();
-                        //RT.loadResourceScript(suffix+".clj");
-                        //RT.loadResourceScript(CLOJURE_RACK);
-                        //Object[] args = new Object[2];
-                        //args[0] = rackEnv;
-                        //args[1] = path[path.length-1];
-                        //Var form = RT.var("com.agh.webserver.rack", "with-rack-response");
-                        Var form = RT.var("com.agh.webserver.rack", "rack-invokation-point");
-                        //PersistentStructMap result = (PersistentStructMap) form.invoke(rackEnv, "hello-complex");
-                        PersistentArrayMap result = (PersistentArrayMap) form.invoke(rackEnv,path[path.length-1]);
+                    Var form = RT.var("com.agh.webserver.framework", "rack-invokation-point");
 
-                        Integer theStatus = null;
-                        String theBody = null;
-                        HashMap theHeaders = null;
+                    HashMap result = (HashMap) form.invoke(rackEnv, path[path.length - 1]);
 
+                    Integer theStatus = null;
+                    String theBody = null;
+                    HashMap theHeaders = null;
+
+                    theStatus = (Integer)result.get("clojure.output.status");
+                    theBody = ((StringWriter)result.get("clojure.output.stream")).toString();
+                    theHeaders = (HashMap) result.get("clojure.output.headers");
+/*
                         //Object[] results = result.toArray();
                         Object[] results = result.values().toArray();
                         for(Object entry : results) {
@@ -127,7 +124,7 @@ public class DefaultRackApplicationFactory implements RackApplicationFactory{
                                 theBody = (String) val;
                             }
                         }
-
+*/
                         final Integer theFinalInteger = theStatus;
                         final String theFinalBody = theBody;
                         final HashMap theFinalHeaders = theHeaders;
@@ -144,8 +141,7 @@ public class DefaultRackApplicationFactory implements RackApplicationFactory{
                             }
 
                             public String getBody() {
-                                String txt = ((String) rackEnv.get("clojure.output.stream"));
-                                System.out.println("BODY->"+txt);
+                                System.out.println("BODY->"+theFinalBody);
                                 return theFinalBody;
                             }
 

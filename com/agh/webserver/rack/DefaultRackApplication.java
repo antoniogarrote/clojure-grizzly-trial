@@ -94,12 +94,18 @@ public abstract class DefaultRackApplication implements RackApplication {
         output_status = new String("clojure.output.status");
         
         //base.put(output_string, new PrintWriter(new StringWriter()));
-        base.put(output_string, "");
-        base.put(output_status, "200");
+        base.put(output_string, new java.io.StringWriter());
+        base.put(output_status, 200);
         base.put(output_headers,new HashMap());
     }
 
     public RackResponse call(final GrizzlyRequest grizzlyRequest) {
+
+        //Let's reset the response
+        base.put(output_string, new java.io.StringWriter());
+        base.put(output_status, 200);
+        base.put(output_headers,new HashMap());
+
         HashMap rackEnv = new HashMap(base);
 
         Request request = grizzlyRequest.getRequest();

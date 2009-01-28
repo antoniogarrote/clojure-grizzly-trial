@@ -12,6 +12,9 @@
 (use 'com.agh.utils)
 (use 'com.agh.monads)
 (use 'com.agh.monads.maybe)
+(use 'com.agh.monads.webio)
+(use 'com.agh.webserver.rack)
+(use 'com.agh.webserver.framework)
 
 (defn parse-request-params
   "Translates a HTTP request params string (k1=v1&k2=v2...) into a params hash"
@@ -82,9 +85,9 @@
   "Parses a rack request and builds a list of tokens suitable to be checked
    against a route pattern"
   ([rack-env]
-     (let [ m (trace (str "METHOD " (list (build-http-method-tokens rack-env))) (list (build-http-method-tokens rack-env)))
-            p (trace (str "PARTS " (build-url-parts-tokens rack-env))(build-url-parts-tokens rack-env))
-            q (trace (str "PARAMS " (list (build-parameters-query-tokens rack-env))) (list (build-parameters-query-tokens rack-env))) ]
+     (let [ m (list (build-http-method-tokens rack-env))
+            p (build-url-parts-tokens rack-env)
+            q (list (build-parameters-query-tokens rack-env)) ]
        (concat m p q))))
 
 ;; Route parser
@@ -396,28 +399,6 @@
                 (recur (rest routes))
                 {:parse-result result :routed entry}))))))))
 
-(comment
-
-(defn main-server-handler
-  "Main handler for requests in the server"
-  ([rack-request]
-     (let [routing-result (try
-                           (check-route-for-rack-request rack-request {})
-                            (catch Exception ex (nothing))) ]
-       (if (nothing? routing-result)
-         (trace "NOHTING ROUTING ERROR" "")
-         (let [parameters (second (:content (:parse-result routing-result)))
-               request (rehash-rack-env rack-request)
-               io-monad (wrap-request request (create-rack-response) parameters)
-               routing-entry (:routed routing-result)
-               functions (concat (:before-filters routing-entry)
-                                 (list (:handler routing-entry))
-                                 (:after-filters routing-entry))]
-)))))
-
-)
-
-
 
 (comment
   "Tests"
@@ -598,6 +579,12 @@
                   p-value (second (first params-left))]
               (recur (rest params-left) (conj tmp-inner {p-name p-value})))))
         (recur (rest parts-left) (conj tmp {:type :url-part :value (first parts-left)}))))))
+
+(defn test-clear-routes-table!
+  ([] (dosync
+       (commute *router-table*
+                (fn [table]
+                  [])))))
 
 (deftest test-run-one-ok
   (is (= (run-one (c_ parse-string-eq  "test")
@@ -786,9 +773,10 @@
 
 (deftest test-route-1
   (is (=
-       (route!
-        (url-pattern GET "google" "com")
-        identity)
+       (do (test-clear-routes-table!)
+           (route!
+            (url-pattern GET "google" "com")
+            identity))
        [{ :pattern '[GET "google" "com"] :handler identity :before-filters [] :after-filters [] }])))
 
 (deftest test-build-http-method-token-1
@@ -817,13 +805,6 @@
              '{:type :url-part, :value "dasfdasdf"}))
       (is (= (nth result 2)
              '{:type :url-part, :value "php"})))))
-
-
-(defn test-clear-routes-table!
-  ([] (dosync
-       (commute *router-table*
-                (fn [table]
-                  [])))))
 
 
 (deftest test-check-route-for-rack-request-1
