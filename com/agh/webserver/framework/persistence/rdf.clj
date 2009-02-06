@@ -892,7 +892,7 @@
 
 ;; Removing triplets from the repository
 (defn remove-graph-template-from-repository!
-  "Stores the statements in a graph into the provided repository"
+  "Remove the statements retrieved froma graph template from the queried repository"
   ([template connection]
      (let [triplets (let [results (query-template-in-repository :subject :predicate :object template connection)]
                       (build-triplets-set

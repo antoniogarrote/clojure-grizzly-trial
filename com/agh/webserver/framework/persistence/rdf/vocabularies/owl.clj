@@ -740,7 +740,12 @@
   "Creates a new individual of a given class"
   ([class-name-or-uri individual-ns props-map]
      (let [uri (tbox-retrieve-uri-for class-name-or-uri)
-           ns-uri (if (keyword? individual-ns) (:prefix (rdf-ns individual-ns)) individual-ns)
+           ns-uri (let [ns (if (keyword? individual-ns) (:prefix (rdf-ns individual-ns)) individual-ns)
+                        last-ns (last ns)]
+                    (if (or (= last-ns \/)
+                            (= last-ns \#))
+                      ns
+                      (str ns "#")))
            owl-class (tbox-find-class-by-uri! uri)
            rdf-props-map (reduce
                           (fn [acum item] (merge acum item))
@@ -968,14 +973,36 @@
            (loop [to-delete properties-to-delete]
              (when (not (nil? to-delete))
                (let [property (first to-delete)
-                     template (build-graph-template [{:template (build-graph [ (build-uri-node [ (build-relation property
-                                                                                                                 (if (tbox-datatype-property? property)
-                                                                                                                   (build-literal-node (to-rdf (get properties property)))
-                                                                                                                   (build-uri-node (get properties property)))) ])])
+                     template (build-graph-template [{:template (build-graph
+                                                                 [ (build-uri-node
+                                                                    [ (build-relation property
+                                                                                      (if (tbox-datatype-property? property)
+                                                                                        (build-literal-node (to-rdf (get properties property)))
+                                                                                        (build-uri-node (get properties property)))) ])])
                                                       :filters []}])
-                     result (query-template-in-repository)
-]))))))))
+                     result (query-template-in-repository)]
+                 ;; next I must check result, deleting it if the property is sotred in the database
+
+                 ;; afterwards, i must repeat the operation with properties to update:
+                 ;; - if the property is not present create it
+                 ;; - if the property is present -> delete it and recreate it with the new value
+))))))))
 )
+
+
+(defn abox-destroy-individual-by-uri
+  "Destroys a given individual provided its URI"
+  ([uri-or-string connection]
+     (let [uri (uri-to-string uri-or-string)
+           template (build-graph-template
+                     [{:template (build-graph [ (build-variable-node :subject
+                                                                     [(build-variable-relation :predicate
+                                                                                               (build-variable-node :object []))]) ])
+                       :filters [(build-filter :subject (str "?subject = <" uri "> || ?object = <" uri ">" ))]}])]
+           (remove-graph-template-from-repository! template connection)))
+  ([uri-or-string]
+     (abox-destroy-individual-by-uri uri-or-string (connection! :default))))
+
 
 (comment
   "Tests"
@@ -1637,6 +1664,31 @@
                   true)
                 (catch Exception _ false))
                false)))))
+
+(deftest test-abox-create-individual-3
+  (let [repo (init-memory-repository!)
+        graph (describe-tbox
+               (describe-owl-datatype-property "http://test.com/prop_a" (xsd-decimal))
+               (describe-owl-datatype-property "http://test.com/prop_b" (xsd-string))
+               (describe-owl-class "http://test.com/class_a")
+               (describe-owl-class "http://test.com/class_b")
+               (describe-owl-subclass "http://test.com/class_a" "http://test.com/class_b")
+               (describe-owl-class-has-property "http://test.com/class_a" "http://test.com/prop_a")
+               (describe-owl-class-has-property "http://test.com/class_b" "http://test.com/prop_b"))]
+    (do (tbox-clear!)
+        (repositories-registry-clear!)
+        (connections-clear!)
+        (register-repository! :test repo)
+        (write-graph-in-repository! graph (connection! :test))
+        (tbox-register-class! :owl-thing (owl-Thing) :test)
+        (tbox-register-class! :class_a "http://test.com/class_a" :test)
+        (tbox-register-class! :class_b "http://test.com/class_b" :test)
+        (tbox-register-datatype-property! :prop_a "http://test.com/prop_a" :test)
+        (tbox-register-datatype-property! :prop_b "http://test.com/prop_b" :test)
+        (let [individual (abox-create-individual :class_a "http://test.com/individuals" {:prop_a 1, :prop_b "hola"})]
+          (is (= (. (:uri individual) (startsWith "http://test.com/individuals#"))
+                 true))))))
+
 
 (deftest test-list-properties-for-individual-1
   (let [repo (init-memory-repository!)
