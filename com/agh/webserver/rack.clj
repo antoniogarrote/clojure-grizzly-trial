@@ -137,7 +137,7 @@
   ([header rack-response]
     (let [header (. header toUpperCase)
           headers (:headers rack-response)]
-      (not (nil? (get headers header))))))
+      (not (null? (get headers header))))))
 
 (defn get-rack-response-header
   "retrieves the content of a header from the rack response"
@@ -177,7 +177,7 @@
 ;    (do (log :info (str "Starting request with params \n " rack-request " , " path))
 ;        (log :info (str "KEYS -> \n" (keys rack-request)))
 ;        (loop [ks (keys rack-request)]
-;          (if (not (nil? ks))
+;          (if (not (null? ks))
 ;            (do
 ;               (log :info (str " " (first ks) " -> " (class (get rack-request (first ks)))))
 ;               (recur (rest ks)))))

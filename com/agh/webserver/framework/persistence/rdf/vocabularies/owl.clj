@@ -355,10 +355,10 @@
                       (fn [tbox]
                         (let [identifier (tbox-retrieve-uri-for resource)
                               old-validations (get (:validations tbox) identifier)
-                              new-validations (if (nil? old-validations)
+                              new-validations (if (null? old-validations)
                                                 {action (set [function])}
                                                 (let [validations-for-action (get old-validations action)]
-                                                  (if (nil? validations-for-action)
+                                                  (if (null? validations-for-action)
                                                     (merge old-validations {action (set [function])})
                                                     (merge old-validations {action (conj validations-for-action function)}))))]
                           {:names (:names tbox)
@@ -374,7 +374,7 @@
                               new-validations (if (nil? old-validations)
                                                 {action (set [function])}
                                                 (let [validations-for-action (get old-validations action)]
-                                                  (if (nil? validations-for-action)
+                                                  (if (null? validations-for-action)
                                                     (merge old-validations {action (set [function])})
                                                     (merge old-validations {action (conj validations-for-action function)}))))]
                           {:names (:names tbox)
@@ -399,7 +399,7 @@
      (dosync
       (commute *tbox*
                (fn [tbox datatype-property-uri]
-                 (if (nil? (get (:uris tbox) (uri-to-string datatype-property-uri)))
+                 (if (null? (get (:uris tbox) (uri-to-string datatype-property-uri)))
                    (let [repository-name (get (:repositories tbox) (uri-to-string datatype-property-uri))
                          connection (connection! repository-name)
                          datatype (retrieve-owl-range-for-property datatype-property-uri connection)
@@ -428,7 +428,7 @@
      (dosync
       (commute *tbox*
                (fn [tbox property-uri]
-                 (if (nil? (get (:uris tbox) (uri-to-string property-uri)))
+                 (if (null? (get (:uris tbox) (uri-to-string property-uri)))
                    (let [repository-name (get (:repositories tbox) (uri-to-string property-uri))
                          connection (connection! repository-name)
                          equivalent-properties (retrieve-owl-equivalent-properties-for-property property-uri connection)
@@ -453,7 +453,7 @@
   "Try to find an OWL class in a repository and stores it in the TBox"
   ([class-uri]
      (dosync
-      (when (nil? (get (:uris @*tbox*) (uri-to-string class-uri)))
+      (when (null? (get (:uris @*tbox*) (uri-to-string class-uri)))
         (let [repository-name (get (:repositories @*tbox*) (uri-to-string class-uri))
               connection (connection! repository-name)
               name (key-for-value (:names @*tbox*) (uri-to-string class-uri))
@@ -526,7 +526,7 @@
      (let [uri-str (uri-to-string uri)
            existing-resource (dosync
                                (get (:uris @*tbox*) uri-str))]
-       (if (nil? existing-resource)
+       (if (null? existing-resource)
          (let [ resource-kind (dosync (get (:resource-kind @*tbox*) uri-str))]
            (if (= resource-kind :owl-class)
              (tbox-find-class-by-uri! uri-str)
@@ -591,7 +591,7 @@
            (dosync
             (let [names (:names @*tbox*)]
               (loop [rest-names-keys (keys names)]
-                (if (nil? rest-names-keys)
+                (if (null? rest-names-keys)
                   nil
                   (let [this-key (first rest-names-keys)
                         this-uri (get names this-key)]
@@ -635,7 +635,7 @@
   :identifier ;; the unique identifier of this individual
   :uri ;; the URI identifying this individual, composed of a namespace and the UUID
   :classes ;; the owl classes this individual belongs to
-  :properties-value-map ;; map with class -> {:property-name value} maps
+  :properties-value-map ;; map with {:property-name value} maps
   :dirty-properties ;; props with value not stored in the repository
   :created ;; true if the individual has been created and has not been saved yet
 )
@@ -652,9 +652,9 @@
            base-map (reduce-maps-list
                      (map (fn [key]
                             (let [key-name (let [to-return (tbox-find-name-for-uri key)]
-                                             (if (nil? to-return) key to-return))]
+                                             (if (null? to-return) key to-return))]
                               (let [the-obj (get properties key)]
-                                (if (nil? the-obj)
+                                (if (null? the-obj)
                                   {}
                                   (if (tbox-datatype-property? key)
                                     {key-name (:value the-obj)}
@@ -672,7 +672,7 @@
   "Try to retrieve an UUID from a URI string"
   ([uri]
      (let [uri-str (uri-to-string uri)]
-       (if (nil? (re-find '#"#" uri-str))
+       (if (null? (re-find '#"#" uri-str))
          (let [index (+ (. uri-str (lastIndexOf "/")) 1)]
            (. uri-str (substring index (. uri-str length))))
          (let [index (+ (. uri-str (lastIndexOf "#")) 1)]
@@ -684,7 +684,7 @@
      (let [resource-validations (tbox-retrieve-validations-for action (tbox-retrieve-uri-for resource-uri))]
        (if (nothing? (loop [validations resource-validations
                             monad (just args-list)]
-                       (if (nil? validations)
+                       (if (null? validations)
                          monad
                          (recur (rest validations)
                                 (>>= (fn [props] (if (true? (apply (first validations) props))
@@ -712,7 +712,7 @@
   ([individual]
      (let [ class-uris (loop [classes (:classes individual)
                               acum (set (map (fn [c] (:uri c)) classes)) ]
-                              (if (nil? classes)
+                              (if (null? classes)
                                 acum
                                 (recur (rest classes)
                                        (clojure.set/union acum (set (map (fn [c] (:uri c)) (:subclass-of (first classes))))))))
@@ -720,7 +720,7 @@
            types-node (build-uri-node (:uri individual)
                                       (loop [uris-left class-uris
                                              acum []]
-                                        (if (nil? uris-left)
+                                        (if (null? uris-left)
                                           acum
                                           (recur (rest uris-left)
                                                  (conj acum (build-relation (rdf-type) (to-rdf (first uris-left))))))))
@@ -755,14 +755,14 @@
                                       (to-rdf (get props-map key))})
                            (keys props-map)))]
        (if (loop [classes (conj (:subclass-of owl-class) owl-class)] ;; lets check if all the validations for superclasses and the class validates
-             (if (nil? classes)
+             (if (null? classes)
                true
                (if (apply-validations :create (:uri (first classes)) (list rdf-props-map))
                  (recur (rest classes))
                  false)))
          (do
            (loop [keys (keys props-map)]
-             (if (not (nil? keys))
+             (if (not (null? keys))
                (let [the-key (first keys)
                      the-key-uri (tbox-retrieve-uri-for the-key)]
                  (if (apply-validations :create the-key-uri (list (get rdf-props-map the-key-uri)))
@@ -873,7 +873,7 @@
      (let [ classes-map (loop [mapping {}
                                to-map classes
                                counter 0]
-                          (if (nil? to-map)
+                          (if (null? to-map)
                             mapping
                             (recur (assoc mapping (keyword (str "c" counter)) (tbox-retrieve-uri-for (first classes)))
                                    (rest classes)
@@ -938,7 +938,7 @@
                                (keys properties-to-update)))
            updated-properties (loop [ the-properties (keys uris-to-update)
                                       the-updated-props (:properties-value-map individual) ]
-                                (if (nil? the-properties)
+                                (if (null? the-properties)
                                   the-updated-props
                                   (recur (rest the-properties)
                                          (let [the-key (first the-properties)
@@ -958,7 +958,7 @@
 
 
 ;; ABox save
-(comment
+;;(comment
 (defn abox-save-individual!
   "Saves the state of an individual into the repository"
   ([individual connection]
@@ -967,27 +967,26 @@
        (let [uri (:uri individual)
              dirty-properties (:dirty-properties individual)
              properties (:properties-value-map individual)
-             properties-to-delete (filter (fn [key] (nil? (get dirty-properties key))) (keys properties))
-             properties-to-update (filter (fn [key] (not (nil? (get dirty-properties key)))) (keys properties))]
+             properties-to-delete (filter (fn [key] (null? (get dirty-properties key))) (keys properties))
+             properties-to-update (filter (fn [key] (not (null? (get dirty-properties key)))) (keys properties))]
          (do
            (loop [to-delete properties-to-delete]
-             (when (not (nil? to-delete))
+             (when (not (null? to-delete))
                (let [property (first to-delete)
-                     template (build-graph-template [{:template (build-graph
-                                                                 [ (build-uri-node
-                                                                    [ (build-relation property
-                                                                                      (if (tbox-datatype-property? property)
-                                                                                        (build-literal-node (to-rdf (get properties property)))
-                                                                                        (build-uri-node (get properties property)))) ])])
-                                                      :filters []}])
-                     result (query-template-in-repository)]
-                 ;; next I must check result, deleting it if the property is sotred in the database
+                     graph (build-graph
+                            [ (build-uri-node uri
+                                              [ (build-relation property
+                                                                (if (tbox-datatype-property? property)
+                                                                  (build-literal-node (to-rdf (get properties property)))
+                                                                  (build-uri-node (get properties property)))) ])])]
+                     ;; next I must check result, deleting it if the property is stored in the database
+                 (remove-graph-from-repository! graph connection)))))))))
 
                  ;; afterwards, i must repeat the operation with properties to update:
                  ;; - if the property is not present create it
                  ;; - if the property is present -> delete it and recreate it with the new value
-))))))))
-)
+;;))))))))
+;;)
 
 
 (defn abox-destroy-individual-by-uri
@@ -1628,7 +1627,7 @@
           (do
             (is (= (set (map (fn [c] (uri-to-string (:uri c))) (:classes individual)))
                    (set ["http://test.com/class_a"])))
-            (is (= (nil? (:identifier individual) )
+            (is (= (null? (:identifier individual) )
                    false))
             (is (= (:properties-value-map individual)
                    {"http://test.com/prop_a" {:value 1, :datatype {:prefix :xsd, :value "decimal"}, :lang ""}
@@ -2104,3 +2103,35 @@
                    {"http://test.com/prop_c" {:value 46, :datatype {:prefix :xsd, :value "decimal"}, :lang ""}}))
             (is (= (:dirty-properties updated-result)
                    (set ["http://test.com/prop_c"]))))))))
+
+
+(deftest test-abox-destroy-1
+  (let [repo (init-memory-repository!)
+        graph (describe-tbox
+               (describe-owl-datatype-property "http://test.com/prop_a" (xsd-decimal))
+               (describe-owl-datatype-property "http://test.com/prop_b" (xsd-string))
+               (describe-owl-datatype-property "http://test.com/prop_c" (xsd-decimal))
+               (describe-owl-class "http://test.com/class_a")
+               (describe-owl-class "http://test.com/class_b")
+               (describe-owl-class "http://test.com/class_c")
+               (describe-owl-subclass "http://test.com/class_a" "http://test.com/class_b"))]
+    (do (tbox-clear!)
+        (repositories-registry-clear!)
+        (connections-clear!)
+        (register-repository! :test repo)
+        (write-graph-in-repository! graph (connection! :test))
+        (tbox-register-class! :owl-thing (owl-Thing) :test)
+        (tbox-register-class! :class_a "http://test.com/class_a" :test)
+        (tbox-register-class! :class_b "http://test.com/class_b" :test)
+        (tbox-register-class! :class_c "http://test.com/class_c" :test)
+        (tbox-register-datatype-property! :prop_a "http://test.com/prop_a" :test)
+        (tbox-register-datatype-property! :prop_b "http://test.com/prop_b" :test)
+        (tbox-register-object-property! :prop_c "http://test.com/prop_c" :test)
+        (abox-create-individual! :class_a "http://test.com/individuals#" {:prop_a 15, :prop_b "hola"} (connection! :test))
+        (let [result (abox-find-individual-uris!
+                      (instance-of-classes :class_a)
+                      (connection! :test))]
+          (do
+            (abox-destroy-individual-by-uri (first result) (connection! :test))
+            (is (= nil
+                   (abox-find-individual-uris! (not-instance-of-classes :class_a) (connection! :test)))))))))

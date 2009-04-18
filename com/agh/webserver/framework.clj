@@ -28,7 +28,7 @@
   "Checks if a given header is present in the HTTP request"
   ([web-request header-or-key]
     (let [header (. (if (string? header-or-key) header-or-key (keyword-to-string header-or-key)) toUpperCase)]
-      (not (and (nil? (get web-request (keyword header-or-key))) (nil? (get web-request header))))))
+      (not (and (null? (get web-request (keyword header-or-key))) (null? (get web-request header))))))
   ([header-or-key]
      (request-header? *request* header-or-key)))
 
@@ -37,7 +37,7 @@
     ([web-request header-or-key]
        (let [header (. (if (string? header-or-key) header-or-key (keyword-to-string header-or-key)) toUpperCase)]
          (let [resp-cased (get web-request header)]
-           (if (nil? resp-cased)
+           (if (null? resp-cased)
              (get web-request (keyword header-or-key))
              resp-cased))))
     ([header-or-key]
@@ -46,7 +46,7 @@
 (defn parameter?
   "checks if a given parameter is present in the request"
   ([parameters name-or-key]
-     (not (nil? (get parameters (keyword name-or-key)))))
+     (not (null? (get parameters (keyword name-or-key)))))
   ([name-or-key]
      (parameter? *parameters* name-or-key)))
 
@@ -133,7 +133,7 @@
                                  (:after-filters routing-entry))
                result (loop [rest-to-lift functions
                              tmp io-monad]
-                        (if (nil? rest-to-lift)
+                        (if (null? rest-to-lift)
                           tmp
                           (recur (rest rest-to-lift)
                                  (>>= (c_ with-web-io (first rest-to-lift)) tmp))))]

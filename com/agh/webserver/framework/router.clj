@@ -33,7 +33,7 @@
   ([request-path]
      (loop [parts (filter #(not= % "") (. request-path split "/"))
             acum []]
-       (if (nil? parts)
+       (if (null? parts)
          acum
          (let [this-part (first parts)]
            (if (not (= -1 (. this-part (indexOf "."))))
@@ -118,7 +118,7 @@
   ([parser computation]
      (let [tokens (first computation)
            state (second computation)] ;; we extract the tokens and state
-       (if (nil? tokens) ;; no more tokens?
+       (if (null? tokens) ;; no more tokens?
          (nothing)  ;; error, there should be something more to parse
          (let [parsing-result (parser (first tokens) state)] ;; run the parser
            (if (nothing? parsing-result) ;; parsing error
@@ -135,7 +135,7 @@
   ([parser computation]
      (loop [current-computation computation] ;; keep on looping till no more tokens or parser error
        (let [tokens (first current-computation)]
-         (if (nil? tokens) ;; end of stream?
+         (if (null? tokens) ;; end of stream?
            (just computation) ;; then success with the current state
            (let [parsing-result (run-one parser current-computation)] ;; run parser one time
              (if (nothing? parsing-result) ;; error?
@@ -150,7 +150,7 @@
   ([parsers computation]
      (let [tokens (first computation)
            state (second computation)]
-       (if (nil? tokens)
+       (if (null? tokens)
          (nothing)
          (loop [the-parsers parsers
                 current-state state]
@@ -158,7 +158,7 @@
                  result (the-parser (first tokens) current-state)]
              (if (nothing? result)
                (nothing)
-               (if (nil? (rest the-parsers))
+               (if (null? (rest the-parsers))
                  (just (list (rest tokens)
                              (from-maybe result)))
                  (recur (rest the-parsers)
@@ -172,7 +172,7 @@
   ([parsers computation]
      (let [tokens (first computation)
            state (second computation)]
-       (if (nil? tokens)
+       (if (null? tokens)
          (nothing)
          (loop [the-parsers parsers]
            (let [the-parser (first the-parsers)
@@ -237,7 +237,7 @@
   {:monad :Maybe}
   [param-name token state]
   (if (is-token-url-parameters? token)
-    (if (not (nil? (param-name (token-value token))))
+    (if (not (null? (param-name (token-value token))))
       (just state)
       (nothing))
     (nothing)))
@@ -249,7 +249,7 @@
   [param-name param-value token state]
   (if (is-token-url-parameters? token)
     (let [value (param-name (token-value token))]
-      (if (not (nil? value))
+      (if (not (null? value))
         (if (= value param-value)
           (just state)
           (nothing))
@@ -344,14 +344,14 @@
 (defn check-route [tokens route-and-env]
   "Transforms a routing pattern into a monadic parser
    and applies the parser to certain route"
-  (if (nil? tokens)
+  (if (null? tokens)
     (nothing)
     (let [all-combinators (map (fn [s] (parser-factory s)) tokens)
           fst-combinator (first all-combinators)
           rest-combinators (rest all-combinators)]
       (loop [combinators rest-combinators
              tmp (>>= fst-combinator (just route-and-env))]
-        (if (nil? combinators)
+        (if (null? combinators)
           tmp
           (recur (rest combinators) (>>= (first combinators) tmp)))))))
 
@@ -391,7 +391,7 @@
            route-and-env (list tokens environment)]
        (dosync
         (loop [routes @*router-table*]
-          (if (nil? routes)
+          (if (null? routes)
             nil
             (let [entry (first routes)
                   result (check-route (:pattern entry) route-and-env)]
@@ -411,7 +411,7 @@
     (loop [pair (first kv)
            pairs (rest kv)]
       (. r (put (first pair) (second pair)))
-      (if (not (nil? pairs))
+      (if (not (null? pairs))
           (recur (first pairs) (rest pairs))))
     r))
 
@@ -555,25 +555,25 @@
 
 
 (defn mock-request-http-tokens [method & parts]
-  (let [result (if (nil? method)
+  (let [result (if (null? method)
                  '()
                  (list {:type :http-method :value method}))]
     (loop [parts-left parts
            tmp result]
-      (if (nil? parts-left)
+      (if (null? parts-left)
         (reverse tmp)
         (recur (rest parts-left) (conj tmp {:type :url-part :value (first parts-left)}))))))
 
 (defn mock-request-http-tokens-with-params [method  parts params]
-  (let [result (if (nil? method)
+  (let [result (if (null? method)
                  '()
                  (list {:type :http-method :value method}))]
     (loop [parts-left parts
            tmp result]
-      (if (nil? parts-left)
+      (if (null? parts-left)
         (loop [params-left params
                tmp-inner {}]
-          (if (nil? params-left)
+          (if (null? params-left)
             (reverse (conj tmp {:type :url-parameters :value tmp-inner}))
             (let [p-name (first (first params-left))
                   p-value (second (first params-left))]

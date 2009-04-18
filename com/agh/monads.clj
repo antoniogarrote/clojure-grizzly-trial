@@ -55,6 +55,6 @@
   ([initial-form  initial-value & rest-forms]
      (let [fst# (first rest-forms)
            others# (rest rest-forms)]
-       (if (nil? others#)
+       (if (empty? others#)
          `(>>=  ~fst# (>>= ~initial-form ~initial-value))
          `(do->>= ~fst# (>>= ~initial-form ~initial-value) ~@others#)))))

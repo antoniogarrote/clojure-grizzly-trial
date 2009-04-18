@@ -65,7 +65,7 @@
   ([]
      (dosync
       (let [maybe-default (:default @*repositories-registry*)]
-        (if (nil? maybe-default)
+        (if (null? maybe-default)
           ((first (keys @*repositories-registry*)) @*repositories-registry*)
           maybe-default)))))
 
@@ -105,7 +105,7 @@
        repository-name
        (dosync
         (let [connection (get @*connections* repository-name)]
-          (if (nil? connection)
+          (if (null? connection)
             (do
               (commute *connections*
                        (fn [registry]
@@ -120,7 +120,7 @@
   ([repository-name]
      (dosync
       (let [connection (get @*connections* repository-name)]
-        (if (not (nil? connection))
+        (if (not (null? connection))
           (do (dissoc @*connections* repository-name)
               (. connection close))))))
   ([] (close-connection! :default)))
@@ -347,7 +347,7 @@
   (let [label (. obj getLabel)
         datatype (. obj (getDatatype))
         lang (.. obj (getLanguage)) ]
-    (if (or (nil? datatype) (= datatype "http://www.w3.org/2001/XMLSchema#string"))
+    (if (or (null? datatype) (= datatype "http://www.w3.org/2001/XMLSchema#string"))
       (build-literal label lang)
       (build-literal label (build-uri (. datatype stringValue))))))
 
@@ -366,7 +366,7 @@
 (defmethod sesame-translate :literal [obj factory]
   "Translates the RDF literal object into a Sesame equivalent"
   (if (= (:lang obj) "")
-    (if (not (nil? (:datatype obj)))
+    (if (not (null? (:datatype obj)))
       (. factory (createLiteral (str (:value obj)) (sesame-translate (:datatype obj) factory)))
       (. factory (createLiteral (:value obj))))
     (. factory (createLiteral (str (:value obj)) (:lang obj)))))
@@ -549,7 +549,7 @@
   "translates a uri-node into a SPARQL query"
   (let [uri-string (str "<" (uri-to-string (:value obj)) ">") ]
     (list uri-string
-          (if (nil? (:relations obj))
+          (if (null? (:relations obj))
             uri-string
             (reduce  (fn [fragment-a fragment-b]  (str fragment-a fragment-b))
                      ""
@@ -560,7 +560,7 @@
   "translates a blank-node into a SPARQL query"
   (let [uri-string (str "_:" (bnode-identifier-to-string (:value obj))) ]
     (list uri-string
-          (if (nil? (:relations obj))
+          (if (null? (:relations obj))
             uri-string
             (reduce  (fn [fragment-a fragment-b]  (str fragment-a fragment-b))
                      ""
@@ -584,7 +584,7 @@
    if a binding for that identifier exists in the bindings hash"
   ([identifier bindings]
      (let [kw-identifier (:value identifier)]
-       (if (nil? (get bindings kw-identifier))
+       (if (null? (get bindings kw-identifier))
          (str "?" (. (str kw-identifier) (substring 1 (. (str kw-identifier) (length)))))
          (let [identifier-val (get bindings kw-identifier)]
            (if (= :literal (rdf-meta identifier-val))
@@ -595,7 +595,7 @@
   "translates a uri-node into a SPARQL query"
   (let [uri-string (resolve-bindings (:value obj) bindings)]
     (list uri-string
-          (if (nil? (:relations obj))
+          (if (null? (:relations obj))
             uri-string
             (reduce  (fn [fragment-a fragment-b]  (str fragment-a fragment-b))
                      ""
@@ -629,7 +629,7 @@
 
 (defmethod to-sparql :sparql-filter [obj bindings]
   "Translates a RDF filter to a SPARQL fragment"
-  (if (nil? (get bindings (:identifier obj)))
+  (if (null? (get bindings (:identifier obj)))
     (str  (:value obj) )
     ""))
 
@@ -673,7 +673,7 @@
   ([bindings-list]
      (reduce
       (fn [col elem-or-nil]
-        (if (nil? elem-or-nil) col (conj col elem-or-nil)))
+        (if (null? elem-or-nil) col (conj col elem-or-nil)))
       []
       (map (fn [x] (if (= #=clojure.lang.Keyword
                           (class x))
@@ -712,7 +712,7 @@
   (let [translated-object (template-to-graph (:object obj) bindings)
         variable-identifier (:value (:value obj))
         value-for-identifier (get bindings variable-identifier) ]
-    (if (nil? value-for-identifier)
+    (if (null? value-for-identifier)
       (throw (Exception. (str "Unbounded variable for variable relation " variable-identifier)))
       (build-relation value-for-identifier translated-object))))
 
@@ -721,7 +721,7 @@
   (let [translated-relations (map (fn [r] (template-to-graph r bindings)) (:relations obj))
         variable-identifier (:value (:value obj))
         value-for-identifier (get bindings variable-identifier) ]
-    (if (nil? value-for-identifier)
+    (if (null? value-for-identifier)
       (throw (Exception. (str "Unbounded variable for variable node " variable-identifier)))
       (let [tag (rdf-meta value-for-identifier)]
         (if (= tag :bnode-identifier)
@@ -811,7 +811,7 @@
      (let [translated-graph (sesame-translate graph (. connection (getValueFactory)))
            the-triplets (:triplets (to-triplets translated-graph))]
        (loop [triplets the-triplets]
-         (if (not (nil? triplets))
+         (if (not (null? triplets))
            (let [triplet (first triplets)]
              (if (. connection (hasStatement (:subject triplet)
                                              (:predicate triplet)
@@ -880,7 +880,7 @@
      (let [translated-graph (sesame-translate graph (. connection (getValueFactory)))
            the-triplets (:triplets (to-triplets translated-graph))]
        (loop [triplets the-triplets]
-         (if (not (nil? triplets))
+         (if (not (null? triplets))
            (let [triplet (first triplets)]
              (do
                (. connection (add (:subject triplet)
@@ -905,7 +905,7 @@
 
            the-triplets (:triplets (sesame-translate triplets (. connection (getValueFactory))))]
        (loop [triplets the-triplets]
-         (if (not (nil? triplets))
+         (if (not (null? triplets))
            (let [triplet (first triplets)]
              (do
                (. connection (remove (:subject triplet)
@@ -921,7 +921,7 @@
      (let [translated-graph (sesame-translate graph (. connection (getValueFactory)))
            the-triplets (:triplets (to-triplets translated-graph))]
        (loop [triplets the-triplets]
-         (if (not (nil? triplets))
+         (if (not (null? triplets))
            (let [triplet (first triplets)]
              (do
                (. connection (remove (:subject triplet)
@@ -945,7 +945,7 @@
   something)
 
 (defmethod to-rdf #=java.lang.String [something]
-  (if (nil? (re-find '#"^http://" something))
+  (if (null? (re-find '#"^http://" something))
     (let [parts (. something (split "\"\\^\\^"))]
       (if (= (count parts) 2) ;; has a datatype?
         (let [value (. (first parts) (substring 1))
@@ -1023,7 +1023,7 @@
         (. connection close))))
 
 (defn mock-namespace [& parts]
-  (if (nil? parts)
+  (if (null? parts)
     (struct xml-namespace "http://test.com/" :test)
     (struct xml-namespace (first parts) (second parts))))
 

@@ -8,6 +8,11 @@
 
 (ns com.agh.utils)
 
+(defn null? [x]
+  "checks if x is nil? or empty?"
+  (if (or (seq? x) (list? x))
+    (or (nil? x) (empty? x))
+    (nil? x)))
 
 (defn trace [msg form]
   "Traces a message and keep on evaluating form"
@@ -69,13 +74,14 @@
 (defmacro compose-inner [ x & fs ]
   (let [ fst# (first fs)
          rst# (rest fs) ]
-    (if (nil? rst#)
+    (if (empty? rst#)
       (if (re-find #"^\(fn[\*]? " (str `~fst#))
         `(~fst# ~x)
         `((curry ~@fst#) ~x))
       (if (re-find #"^\(fn[\*]? " (str `~fst#))
         `(~fst# (compose-inner ~x ~@rst#))
-        `( (curry ~@fst#) (compose-inner ~x ~@rst#))))))
+        `( (curry ~@fst#) (compose-inner ~x ~@rst#)))))
+    )
 
 (defmacro compose
   "Allow the composition of several currified or single argument
@@ -85,7 +91,7 @@
        `(fn [x#] (~f x#))
        `(fn [x#] ((curry ~@f) x#))))
   ([ f & fs ]
-     (if (re-find #"^\(fn[\*]? "(str `~f))
+     (if (re-find #"^\(fn[\*]? " (str `~f))
        `(fn [x#] (~f (compose-inner x# ~@fs)))
        `(fn [x#] ((curry ~@f) (compose-inner x# ~@fs))))))
 
@@ -143,3 +149,15 @@
 (deftest test-keword-to-string
   (is (= (keyword-to-string :x)
          "x")))
+
+(deftest test-null-1
+  (is (= true
+         (null? '()))))
+
+(deftest test-null-2
+  (is (= true
+         (null? nil))))
+
+(deftest test-null-3
+  (is (= false
+         (null? 'x))))
